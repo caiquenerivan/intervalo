@@ -37,17 +37,30 @@ export interface Analysis {
 /** 4096 samples at 11 025 Hz ≈ 0.37 s: bins 2.7 Hz apart, enough to separate semitones at C2. */
 const FFT_SIZE = 4096
 const HOP = 1024
-/** C2 … C7: below is rumble, above is mostly overtones and cymbals. */
+/** C2 … about F6: below is rumble, above is overtones, cymbals and the top of the melody. */
 const MIN_FREQ = 65
-const MAX_FREQ = 2100
-/** Frames averaged on each side before matching (≈ ±0.2 s). */
-const SMOOTH = 2
+const MAX_FREQ = 1400
+/**
+ * Harmony lives low, melody lives high. Peaks up to this frequency count in
+ * full; above it they fade, so a voice or lead guitar cannot outvote the band.
+ */
+const HARMONY_CEILING = 330
+/** Notes below this are the bass line, which nearly always plays the chord's root. */
+const BASS_CEILING = 180
+/** How much the bass note counts toward choosing the root. */
+const BASS_WEIGHT = 0.35
+/**
+ * Frames on each side for the median filter (≈ ±0.75 s). A chord tone is
+ * there for the whole chord; a melody note is gone in a fraction of a second
+ * and the median simply never sees it.
+ */
+const SMOOTH = 8
 /** Cost of changing chord between frames; higher = fewer, longer chords. */
-const CHANGE_PENALTY = 0.35
+const CHANGE_PENALTY = 0.6
 /** Score given to "no chord"; a real chord has to beat it. */
 const NO_CHORD_SCORE = 0.55
 /** Segments shorter than this are absorbed by their neighbour. */
-const MIN_SEGMENT = 0.4
+const MIN_SEGMENT = 0.75
 
 /** In-place radix-2 FFT. `re`/`im` must have a power-of-two length. */
 export function fft(re: Float32Array, im: Float32Array): void {
@@ -152,21 +165,38 @@ function estimateTuning(peaks: Peaks): number {
   return c === 0 && s === 0 ? 0 : Math.atan2(s, c) / (2 * Math.PI)
 }
 
+interface Chroma {
+  /** Harmony: 12 pitch classes per frame, low register favoured. */
+  chroma: Float32Array[]
+  /** Bass register only. */
+  bass: Float32Array[]
+  energy: Float32Array
+}
+
 /** Folds each frame's peaks into 12 pitch classes: octaves are ignored on purpose. */
-function chromagram(peaks: Peaks, tuning: number): { chroma: Float32Array[]; energy: Float32Array } {
+function chromagram(peaks: Peaks, tuning: number): Chroma {
   const frames = peaks.offsets.length - 1
   const chroma: Float32Array[] = []
+  const bass: Float32Array[] = []
   const energy = new Float32Array(frames)
   for (let f = 0; f < frames; f++) {
     const bins = new Float32Array(12)
+    const low = new Float32Array(12)
     for (let i = peaks.offsets[f]; i < peaks.offsets[f + 1]; i++) {
-      const midi = 69 + 12 * Math.log2(peaks.freq[i] / 440) - tuning
-      bins[((Math.round(midi) % 12) + 12) % 12] += peaks.mag[i]
+      const freq = peaks.freq[i]
+      const midi = 69 + 12 * Math.log2(freq / 440) - tuning
+      const pc = ((Math.round(midi) % 12) + 12) % 12
+      // Square root: a loud lead should count more than a quiet pad, not ten times more.
+      const level = Math.sqrt(peaks.mag[i])
+      const weight = freq <= HARMONY_CEILING ? 1 : (HARMONY_CEILING / freq) ** 1.5
+      bins[pc] += level * weight
+      if (freq <= BASS_CEILING) low[pc] += level
       energy[f] += peaks.mag[i]
     }
     chroma.push(bins)
+    bass.push(low)
   }
-  return { chroma, energy }
+  return { chroma, bass, energy }
 }
 
 /** Length of a three-note template vector, for the cosine similarity. */
@@ -178,28 +208,40 @@ const NO_CHORD = 24
 const labelOf = (state: number): ChordLabel | null =>
   state === NO_CHORD ? null : { root: state % 12, minor: state >= 12 }
 
-function scoreFrames(chroma: Float32Array[], energy: Float32Array): Float32Array[] {
+function scoreFrames({ chroma, bass, energy }: Chroma): Float32Array[] {
   // Anything far below the song's typical level is treated as silence.
   const sorted = Array.from(energy).sort((a, b) => a - b)
   const quiet = sorted[Math.floor(sorted.length * 0.9)] * 0.03
 
-  const smoothed = new Float32Array(12)
+  const steady = new Float32Array(12)
+  const low = new Float32Array(12)
+  const column: number[] = []
   return chroma.map((_, f) => {
     const scores = new Float32Array(STATES)
     if (energy[f] <= quiet) {
       scores[NO_CHORD] = 1
       return scores
     }
-    smoothed.fill(0)
-    for (let g = Math.max(0, f - SMOOTH); g <= Math.min(chroma.length - 1, f + SMOOTH); g++) {
-      for (let pc = 0; pc < 12; pc++) smoothed[pc] += chroma[g][pc]
+    const from = Math.max(0, f - SMOOTH)
+    const to = Math.min(chroma.length - 1, f + SMOOTH)
+    low.fill(0)
+    for (let pc = 0; pc < 12; pc++) {
+      column.length = 0
+      for (let g = from; g <= to; g++) {
+        column.push(chroma[g][pc])
+        low[pc] += bass[g][pc]
+      }
+      column.sort((a, b) => a - b)
+      steady[pc] = column[column.length >> 1]
     }
-    const norm = Math.hypot(...smoothed) || 1
+    const norm = Math.hypot(...steady) || 1
+    const lowTotal = low.reduce((a, b) => a + b, 0) || 1
     for (let root = 0; root < 12; root++) {
-      const fifth = smoothed[(root + 7) % 12]
+      const fifth = steady[(root + 7) % 12]
+      const bassVote = (BASS_WEIGHT * low[root]) / lowTotal
       // Cosine similarity between the chroma and a root–third–fifth template.
-      scores[root] = (smoothed[root] + smoothed[(root + 4) % 12] + fifth) / (norm * TEMPLATE_NORM)
-      scores[root + 12] = (smoothed[root] + smoothed[(root + 3) % 12] + fifth) / (norm * TEMPLATE_NORM)
+      scores[root] = (steady[root] + steady[(root + 4) % 12] + fifth) / (norm * TEMPLATE_NORM) + bassVote
+      scores[root + 12] = (steady[root] + steady[(root + 3) % 12] + fifth) / (norm * TEMPLATE_NORM) + bassVote
     }
     scores[NO_CHORD] = NO_CHORD_SCORE
     return scores
@@ -307,11 +349,11 @@ export function analyseChords(samples: Float32Array, sampleRate: number): Analys
   const duration = samples.length / sampleRate
   const peaks = findPeaks(samples, sampleRate)
   const tuning = estimateTuning(peaks)
-  const { chroma, energy } = chromagram(peaks, tuning)
-  const path = viterbi(scoreFrames(chroma, energy))
+  const features = chromagram(peaks, tuning)
+  const path = viterbi(scoreFrames(features))
   return {
     segments: toSegments(path, sampleRate, duration),
-    key: estimateKey(chroma),
+    key: estimateKey(features.chroma),
     tuningCents: tuning * 100,
     duration,
   }

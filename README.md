@@ -17,7 +17,7 @@ No account, no backend: everything runs on the device, including the microphone 
 2. **Ear training** — each level starts with a short lesson: what every interval or chord feels like, a familiar tune to hang it on, and side-by-side examples from the same starting note. Then the app plays one and you name it. Four levels each, scheduled with spaced repetition so what you miss comes back sooner; after a mistake you can hear your answer against the right one.
 3. **Tuner** — tunes a guitar from the microphone, detecting pitch with the YIN algorithm.
 4. **Lessons** — eight short lessons (notes → intervals → chords → scales) with quizzes, "find this note" exercises and listening rounds. Progress, XP, a daily streak and achievements are saved locally.
-5. **Songs** — drop in an MP3 (or WAV, M4A, OGG) and get its chords on a timeline that follows the playback, plus the likely key and how far the recording is from standard tuning. Major and minor chords only.
+5. **Songs** — drop in an MP3 (or WAV, M4A, OGG) and get its chords on a timeline that follows the playback, plus the likely key, how far the recording is from standard tuning and a guitar diagram for each chord. Major and minor chords only.
 
 The interface is in English and Portuguese.
 
@@ -85,15 +85,16 @@ Tests feed the detector pure tones, a tone whose 2nd harmonic is louder than the
 Finding one pitch (the tuner) and finding a chord in a full mix are different problems: YIN assumes a single periodic source, and a song is many at once. [`chords.ts`](src/audio/chords.ts) uses the classic chroma approach instead:
 
 1. **Decode at 11 kHz.** Chords live below ~2 kHz. `decodeAudioData` on an `OfflineAudioContext` created at 11 025 Hz resamples for free, so there is a quarter of the data and each 4096-sample FFT window spans 0.37 s — bins 2.7 Hz apart, enough to separate semitones down to C2.
-2. **Spectral peaks.** Each frame keeps only its local maxima between 65 Hz and 2.1 kHz, with parabolic interpolation for the exact frequency. This drops the noise floor and most of the drums.
+2. **Spectral peaks.** Each frame keeps only its local maxima between 65 Hz and 1.4 kHz, with parabolic interpolation for the exact frequency. This drops the noise floor and most of the drums.
 3. **Tuning correction.** Recordings are often not at A = 440. The deviation of every peak from its nearest semitone is averaged as a circular mean (it is an angle: +50 and −50 cents are the same place) and removed before rounding to notes.
-4. **Chroma.** Peaks are folded into 12 pitch classes, ignoring the octave.
-5. **Template matching.** Each frame is compared (cosine similarity) with the root–third–fifth pattern of the 24 major and minor triads, plus a "no chord" state.
-6. **Viterbi smoothing.** Picking the best chord per frame flickers on every passing note. Viterbi finds the sequence with the best total score while charging a fixed cost per chord change, which is what makes the output read like a chord chart.
+4. **Chroma, weighted toward the harmony.** Peaks are folded into 12 pitch classes, ignoring the octave. Peaks above ~330 Hz fade progressively and magnitudes are square-rooted, so a loud voice or lead guitar cannot outvote the band. Notes below 180 Hz are also kept apart as a bass chroma.
+5. **Median filter over time.** Each pitch class is replaced by its median over ±0.75 s. A chord tone is present for the whole chord; a melody note lasts a fraction of a second, so the median never sees it. This was the fix for the first version, which followed the tune instead of the chords.
+6. **Template matching.** Each frame is compared (cosine similarity) with the root–third–fifth pattern of the 24 major and minor triads, plus a "no chord" state. The bass chroma adds a vote for the root, since the bass line nearly always plays it.
+7. **Viterbi smoothing.** Picking the best chord per frame flickers on every passing note. Viterbi finds the sequence with the best total score while charging a fixed cost per chord change, which is what makes the output read like a chord chart.
 
 The key comes from correlating the song's total chroma with the Krumhansl–Kessler key profiles.
 
-**Limits, stated plainly:** it only knows major and minor triads (G7 shows as G), it has no notion of bars or beats, and it has only been verified on synthesised progressions — including a detuned one and an MP3 round trip — not measured against annotated real recordings. Expect it to do well on clear guitar or piano and to struggle with heavy distortion.
+**Limits, stated plainly:** it only knows major and minor triads (G7 shows as G), it has no notion of bars or beats, and it has only been verified on synthesised progressions — with a louder melody and drums on top, a detuned one and an MP3 round trip — not measured against annotated real recordings. Expect it to do well on clear guitar or piano and to struggle with heavy distortion.
 
 The analysis runs on the main thread after decoding: about a second for a short clip. A long song would be better off in a Web Worker.
 

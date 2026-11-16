@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { analyseChords, chordName, type Analysis, type ChordLabel } from '../../audio/chords'
-import { playNote } from '../../audio/synth'
-import { Fretboard } from '../../components/Fretboard'
-import { Keyboard } from '../../components/Keyboard'
-import { marksFromTones } from '../../components/marks'
-import { Button, Chip, FieldLabel, PageHeader } from '../../components/ui'
+import { playChord } from '../../audio/synth'
+import { ChordBox } from '../../components/ChordBox'
+import { Button, FieldLabel, PageHeader } from '../../components/ui'
 import { useT } from '../../i18n'
-import { buildTones, chordById } from '../../theory/formulas'
+import { GUITAR_TUNING } from '../../theory/instruments'
 import { FLAT_NAMES, SHARP_NAMES, prefersFlats } from '../../theory/notes'
+import { chordShape } from '../../theory/shapes'
 
 /**
  * Chords live below ~2 kHz, so the file is decoded straight to a low sample
@@ -16,6 +15,8 @@ import { FLAT_NAMES, SHARP_NAMES, prefersFlats } from '../../theory/notes'
 const ANALYSIS_RATE = 11025
 const MAX_MB = 60
 const PX_PER_SECOND = 44
+/** A chord heard for less than this share of the song is left out of the summary: usually a misreading. */
+const MIN_SHARE = 0.03
 
 type State =
   | { phase: 'idle' }
@@ -151,7 +152,6 @@ function Result({ name, url, analysis, onAnother }: ResultProps) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
   const [time, setTime] = useState(0)
-  const [pinned, setPinned] = useState<ChordLabel | null>(null)
 
   const { segments, key, tuningCents, duration } = analysis
   // Spell the chords the way the song's key would: B♭ in F major, A♯ never.
@@ -197,21 +197,26 @@ function Result({ name, url, analysis, onAnother }: ResultProps) {
       entry.seconds += s.end - s.start
       totals.set(id, entry)
     }
-    return [...totals.values()].sort((a, b) => b.seconds - a.seconds)
-  }, [segments])
+    return [...totals.values()]
+      .filter((entry) => entry.seconds >= duration * MIN_SHARE)
+      .sort((a, b) => b.seconds - a.seconds)
+  }, [segments, duration])
 
   const seek = (seconds: number) => {
     const audio = audioRef.current
     if (!audio) return
     audio.currentTime = seconds + 0.01
-    setPinned(null)
     void audio.play()
   }
 
-  const shown = pinned ?? current?.chord ?? null
-  const marks = shown
-    ? marksFromTones(buildTones(shown.root, chordById(shown.minor ? 'min' : 'maj')), 'notes')
-    : {}
+  const strum = (chord: ChordLabel) => {
+    // Hearing the chord only makes sense when the song is not playing over it.
+    if (!audioRef.current?.paused) return
+    const midis = chordShape(chord.root, chord.minor).flatMap((fret, string) =>
+      fret < 0 ? [] : [GUITAR_TUNING[string] + fret],
+    )
+    playChord(midis, 'guitar', 0.04, 2)
+  }
   const same = (a: ChordLabel | null, b: ChordLabel | null) => !!a && !!b && a.root === b.root && a.minor === b.minor
   const offTune = Math.abs(tuningCents) >= 10
 
@@ -295,25 +300,18 @@ function Result({ name, url, analysis, onAnother }: ResultProps) {
 
       <div className="mt-5">
         <FieldLabel>{t('songs.used')}</FieldLabel>
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-2">
           {used.map(({ chord }) => (
-            <Chip
+            <ChordBox
               key={label(chord)}
-              active={same(shown, chord)}
-              onClick={() => setPinned(same(pinned, chord) ? null : chord)}
-            >
-              {label(chord)}
-            </Chip>
+              name={label(chord)}
+              shape={chordShape(chord.root, chord.minor)}
+              active={same(current?.chord ?? null, chord)}
+              onClick={() => strum(chord)}
+            />
           ))}
         </div>
       </div>
-
-      {shown && (
-        <div className="mt-5 grid gap-4 [&>*]:min-w-0">
-          <Fretboard marks={marks} onNote={(m) => playNote(m, 'guitar')} label={t('explore.fretboard')} />
-          <Keyboard marks={marks} onNote={(m) => playNote(m, 'piano')} label={t('explore.keyboard')} />
-        </div>
-      )}
     </div>
   )
 }
