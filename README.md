@@ -9,7 +9,7 @@ No account, no backend: everything runs on the device, including the microphone 
 |---|---|
 | ![Home](docs/home.jpg) | ![Chord and scale explorer](docs/explore.jpg) |
 | ![Ear training](docs/ear-training.jpg) | ![Tuner](docs/tuner.jpg) |
-| ![Chords from a song](docs/songs.jpg) | ![Lesson](docs/lesson.jpg) |
+| ![Chords from a song](docs/songs.jpg) | ![Notes of a song](docs/notes.jpg) |
 
 ## What it does
 
@@ -17,7 +17,7 @@ No account, no backend: everything runs on the device, including the microphone 
 2. **Ear training** — each level starts with a short lesson: what every interval or chord feels like, a familiar tune to hang it on, and side-by-side examples from the same starting note. Then the app plays one and you name it. Four levels each, scheduled with spaced repetition so what you miss comes back sooner; after a mistake you can hear your answer against the right one.
 3. **Tuner** — tunes a guitar from the microphone, detecting pitch with the YIN algorithm.
 4. **Lessons** — eight short lessons (notes → intervals → chords → scales) with quizzes, "find this note" exercises and listening rounds. Progress, XP, a daily streak and achievements are saved locally.
-5. **Songs** — drop in an MP3 (or WAV, M4A, OGG) and get its chords laid out like a chord sheet that follows the playback, plus the likely key, how far the recording is from standard tuning and a guitar diagram for each chord (major and minor chords only). Under the chords it draws every note it hears as a piano roll — voice and instruments together — which can be played back on top of the song to check it by ear.
+5. **Songs** — drop in an MP3 (or WAV, M4A, OGG) and get its chords laid out like a chord sheet that follows the playback, plus the likely key, how far the recording is from standard tuning and a guitar diagram for each chord (major and minor chords only). Below the chords, a note panel shows every note it hears in the stretch being played — voice and instruments together — on a sideways piano: one named row per key, with sharps and flats in their own colour and each note carrying its name. The notes can be played back on top of the song to check them by ear.
 
 The interface is in English and Portuguese.
 
@@ -118,7 +118,9 @@ Things that had to be solved around it:
 
 **What it does not do:** tell the voice from the guitar. Everything lands in one piano roll. Separating sources needs much larger models (Demucs and the like), too heavy for a static site.
 
-**How far to trust it:** on a synthesised clip of fingerpicking plus a sung line, all 78 real notes were found and 2 of the 135 reported notes were wrong. Real recordings are harder and have not been measured; the "Play them along" switch exists so the listener can judge. It is drawn as a piano roll rather than staff notation on purpose: writing rhythm needs the tempo and a decision about where each note sits on the beat, and guessing that badly would make the result look more exact than it is.
+**How far to trust it:** on a synthesised clip of fingerpicking plus a sung line, all 78 real notes were found and 2 of the 135 reported notes were wrong. Real recordings are harder and have not been measured; the "Play them along" switch exists so the listener can judge. **Reading it without knowing music.** A bare piano roll assumes you can tell a pitch from its height, which a beginner cannot. So the panel pages through the song 10 seconds at a time (wide enough that even a short note has room for its name), labels every row with its key, shades the black-key rows, colours sharps and flats differently from natural notes, and spells them the way the song's key does (F♯ in E major, G♭ in D♭ major). Tapping a note or a key plays it.
+
+It is drawn as a piano roll rather than staff notation on purpose: writing rhythm needs the tempo and a decision about where each note sits on the beat, and guessing that badly would make the result look more exact than it is.
 
 ### Sound without samples
 

@@ -171,7 +171,12 @@ export const pt: Record<Key, string> = {
   'songs.notesHear': 'Tocar junto',
   'songs.notesHearHint': 'Toca cada nota detectada num piano enquanto a música toca, para você ouvir onde acertou',
   'songs.notesLegend':
-    'Todas as notas que o modelo ouve, de {low} (embaixo) a {high} (em cima) — voz e instrumentos juntos; ele não sabe dizer qual é qual. Linhas mais apagadas são notas de que ele teve menos certeza. Ligue “Tocar junto” para conferir de ouvido.',
+    'Todas as notas que o modelo ouve neste trecho, voz e instrumentos juntos — ele não sabe dizer qual é qual. Cada linha é uma tecla do piano, com o nome à esquerda; o azul marca as teclas pretas (sustenidos e bemóis). Notas mais apagadas são as de que ele teve menos certeza. Toque numa nota ou numa tecla para ouvir.',
+  'songs.notesTitle': 'Notas — {from} a {to}',
+  'songs.natural': 'natural',
+  'songs.accidental': 'sustenido / bemol',
+  'songs.prevPage': '10 segundos anteriores',
+  'songs.nextPage': 'Próximos 10 segundos',
   'songs.another': 'Escolher outro arquivo',
   'songs.limits':
     'Isto é uma estimativa, não uma transcrição. O app só ouve acordes maiores e menores, então um G7 aparece como G e um Cmaj7 como C ou Em. Funciona melhor em gravações com violão ou piano claros, e pior com muita distorção ou bateria alta.',

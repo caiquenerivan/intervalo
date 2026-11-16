@@ -168,7 +168,12 @@ export const en = {
   'songs.notesHear': 'Play them along',
   'songs.notesHearHint': 'Plays each detected note on a piano while the song plays, so you can hear where it is right',
   'songs.notesLegend':
-    'Every note the model hears, from {low} (bottom) to {high} (top) — voice and instruments together; it cannot tell which is which. Fainter lines are notes it was less sure of. Turn on “Play them along” to check by ear.',
+    'Every note the model hears in this stretch, voice and instruments together — it cannot tell which is which. Each row is one key of the piano, named on the left; blue marks the black keys (sharps and flats). Fainter notes are ones it was less sure of. Tap a note or a key to hear it.',
+  'songs.notesTitle': 'Notes — {from} to {to}',
+  'songs.natural': 'natural',
+  'songs.accidental': 'sharp / flat',
+  'songs.prevPage': 'Previous 10 seconds',
+  'songs.nextPage': 'Next 10 seconds',
   'songs.another': 'Choose another file',
   'songs.limits':
     'This is an estimate, not a transcription. It hears only major and minor chords, so a G7 shows as G and a Cmaj7 as C or Em. It works best on recordings where guitar or piano is clear, and worse with heavy distortion or loud drums.',

@@ -10,6 +10,7 @@ import { useT } from '../../i18n'
 import { GUITAR_TUNING } from '../../theory/instruments'
 import { FLAT_NAMES, SHARP_NAMES, prefersFlats } from '../../theory/notes'
 import { chordShape } from '../../theory/shapes'
+import { NoteRoll } from './NoteRoll'
 
 /**
  * The file is decoded once at the rate the note model needs (22 kHz) and
@@ -250,19 +251,6 @@ function Result({ name, url, prepared, notes, onAnother }: ResultProps) {
   const current = segments[index]
   const next = segments.slice(index + 1).find((s) => s.chord)
 
-  // The note lane is scaled to the notes this song actually uses.
-  const range = useMemo(() => {
-    if (!notes.length) return null
-    let low = Infinity
-    let high = -Infinity
-    for (const note of notes) {
-      low = Math.min(low, note.midi)
-      high = Math.max(high, note.midi)
-    }
-    return { low: low - 1, high: high + 1 }
-  }, [notes])
-  const noteName = (midi: number) => `${names[midi % 12]}${Math.floor(midi / 12) - 1}`
-
   const used = useMemo(() => {
     const totals = new Map<string, { chord: ChordLabel; seconds: number }>()
     for (const s of segments) {
@@ -341,7 +329,7 @@ function Result({ name, url, prepared, notes, onAnother }: ResultProps) {
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <div className="text-xs font-bold tracking-widest text-mute uppercase">{t('songs.timeline')}</div>
           <div className="flex flex-wrap gap-1.5">
-            {range && (
+            {notes.length > 0 && (
               <>
                 <Chip active={showNotes} onClick={() => setShowNotes((v) => !v)}>
                   ♪ {t('songs.notes')}
@@ -407,42 +395,16 @@ function Result({ name, url, prepared, notes, onAnother }: ResultProps) {
                     />
                   )}
                 </div>
-                {showNotes && range && (
-                  <div className="relative mt-0.5 mb-1 h-20 overflow-hidden rounded-sm bg-ink/60">
-                    {notes.map((note, i) => {
-                      if (note.end <= rowStart || note.start >= rowEnd) return null
-                      const from = Math.max(note.start, rowStart)
-                      const to = Math.min(note.end, rowEnd)
-                      const height = (note.midi - range.low) / (range.high - range.low)
-                      const sounding = time >= note.start && time < note.end
-                      return (
-                        <span
-                          key={i}
-                          title={`${clock(note.start)} · ${noteName(note.midi)}`}
-                          className={`absolute h-[3px] rounded-full ${sounding ? 'bg-root' : 'bg-accent'}`}
-                          style={{
-                            left: `${((from - rowStart) / ROW_SECONDS) * 100}%`,
-                            width: `max(3px, ${((to - from) / ROW_SECONDS) * 100}%)`,
-                            bottom: `calc(${height * 100}% - 1.5px)`,
-                            // Fainter = the model was less sure of the note.
-                            opacity: sounding ? 1 : 0.35 + 0.65 * Math.min(1, note.strength * 1.6),
-                          }}
-                        />
-                      )
-                    })}
-                  </div>
-                )}
                 </div>
               </div>
             )
           })}
         </div>
-        {showNotes && range && (
-          <p className="mt-2 max-w-2xl text-xs text-mute">
-            {t('songs.notesLegend', { low: noteName(range.low + 1), high: noteName(range.high - 1) })}
-          </p>
-        )}
       </div>
+
+      {showNotes && notes.length > 0 && (
+        <NoteRoll notes={notes} segments={segments} time={time} names={names} chordLabel={label} onSeek={seek} />
+      )}
 
       <div className="mt-5">
         <FieldLabel>{t('songs.used')}</FieldLabel>
