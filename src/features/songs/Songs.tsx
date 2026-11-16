@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import type { AnalysisMessage, AnalysisRequest } from '../../audio/analysis.worker'
 import { chordName, segment, type ChordLabel, type Detail, type Prepared } from '../../audio/chords'
-import type { MelodyNote } from '../../audio/melody'
 import { playChord, playNote } from '../../audio/synth'
+import { TRANSCRIBE_RATE, halveRate, type TranscribedNote } from '../../audio/transcribe'
+import type { TranscribeMessage } from '../../audio/transcribe.worker'
 import { ChordBox } from '../../components/ChordBox'
 import { Button, Chip, FieldLabel, PageHeader } from '../../components/ui'
 import { useT } from '../../i18n'
@@ -11,10 +12,11 @@ import { FLAT_NAMES, SHARP_NAMES, prefersFlats } from '../../theory/notes'
 import { chordShape } from '../../theory/shapes'
 
 /**
- * Chords live below ~2 kHz, so the file is decoded straight to a low sample
- * rate: a quarter of the data, and each FFT window covers four times as long.
+ * The file is decoded once at the rate the note model needs (22 kHz) and
+ * halved for the chords, which live below ~2 kHz: a quarter of the usual
+ * data, and each FFT window covers four times as long.
  */
-const ANALYSIS_RATE = 11025
+const ANALYSIS_RATE = TRANSCRIBE_RATE / 2
 const MAX_MB = 60
 /** Seconds of music per row of the chart. Rows instead of one long strip: the whole song fits on screen. */
 const ROW_SECONDS = 20
@@ -23,14 +25,15 @@ const MIN_SHARE = 0.03
 
 type State =
   | { phase: 'idle' }
-  | { phase: 'decoding' | 'chords' | 'melody'; name: string }
+  | { phase: 'decoding' | 'chords'; name: string }
+  | { phase: 'notes'; name: string; progress: number }
   | { phase: 'error'; message: string }
-  | { phase: 'done'; name: string; url: string; prepared: Prepared; melody: MelodyNote[] }
+  | { phase: 'done'; name: string; url: string; prepared: Prepared; notes: TranscribedNote[] }
 
 async function decodeToMono(file: File): Promise<Float32Array> {
   // decodeAudioData resamples to the context's rate, so an offline context
-  // at 11 kHz gives us the downsampled signal for free.
-  const ctx = new OfflineAudioContext(1, 1, ANALYSIS_RATE)
+  // at the target rate gives us the resampled signal for free.
+  const ctx = new OfflineAudioContext(1, 1, TRANSCRIBE_RATE)
   const audio = await ctx.decodeAudioData(await file.arrayBuffer())
   const mono = new Float32Array(audio.length)
   for (let ch = 0; ch < audio.numberOfChannels; ch++) {
@@ -40,11 +43,8 @@ async function decodeToMono(file: File): Promise<Float32Array> {
   return mono
 }
 
-/** Runs the analysis off the main thread, reporting which stage it is in. */
-function analyse(
-  samples: Float32Array,
-  onStage: (stage: 'chords' | 'melody') => void,
-): Promise<{ prepared: Prepared; melody: MelodyNote[] }> {
+/** Runs the chord analysis off the main thread. */
+function analyseChords(samples: Float32Array): Promise<Prepared> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('../../audio/analysis.worker.ts', import.meta.url), { type: 'module' })
     const finish = (run: () => void) => {
@@ -52,14 +52,31 @@ function analyse(
       run()
     }
     worker.onmessage = ({ data }: MessageEvent<AnalysisMessage>) => {
-      if (data.type === 'progress') onStage(data.stage)
-      else if (data.type === 'done') finish(() => resolve({ prepared: data.prepared, melody: data.melody }))
+      if (data.type === 'done') finish(() => resolve(data.prepared))
       else finish(() => reject(new Error('analysis failed')))
     }
     worker.onerror = () => finish(() => reject(new Error('analysis failed')))
     const request: AnalysisRequest = { samples, sampleRate: ANALYSIS_RATE }
     // Transfer, not copy: the samples are several megabytes and not needed here again.
     worker.postMessage(request, [samples.buffer])
+  })
+}
+
+/** Runs the note model off the main thread; it can take minutes on a slow machine. */
+function transcribeNotes(samples: Float32Array, onProgress: (fraction: number) => void): Promise<TranscribedNote[]> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('../../audio/transcribe.worker.ts', import.meta.url), { type: 'module' })
+    const finish = (run: () => void) => {
+      worker.terminate()
+      run()
+    }
+    worker.onmessage = ({ data }: MessageEvent<TranscribeMessage>) => {
+      if (data.type === 'progress') onProgress(data.fraction)
+      else if (data.type === 'done') finish(() => resolve(data.notes))
+      else finish(() => reject(new Error('transcription failed')))
+    }
+    worker.onerror = () => finish(() => reject(new Error('transcription failed')))
+    worker.postMessage(samples, [samples.buffer])
   })
 }
 
@@ -85,8 +102,15 @@ export function Songs() {
     setState({ phase: 'decoding', name: file.name })
     try {
       const mono = await decodeToMono(file)
-      const result = await analyse(mono, (stage) => setState({ phase: stage, name: file.name }))
-      setState({ phase: 'done', name: file.name, url: URL.createObjectURL(file), ...result })
+      setState({ phase: 'chords', name: file.name })
+      const prepared = await analyseChords(halveRate(mono))
+      setState({ phase: 'notes', name: file.name, progress: 0 })
+      // The chords are the dependable part. If the note model cannot load or
+      // run (offline, no WebGL…), show them anyway rather than nothing.
+      const notes = await transcribeNotes(mono, (progress) =>
+        setState({ phase: 'notes', name: file.name, progress }),
+      ).catch(() => [] as TranscribedNote[])
+      setState({ phase: 'done', name: file.name, url: URL.createObjectURL(file), prepared, notes })
     } catch {
       setState({ phase: 'error', message: t('songs.error') })
     }
@@ -98,7 +122,7 @@ export function Songs() {
     void load(e.dataTransfer.files[0])
   }
 
-  const busy = state.phase === 'decoding' || state.phase === 'chords' || state.phase === 'melody'
+  const busy = state.phase === 'decoding' || state.phase === 'chords' || state.phase === 'notes'
 
   return (
     <div>
@@ -121,7 +145,7 @@ export function Songs() {
           name={state.name}
           url={state.url}
           prepared={state.prepared}
-          melody={state.melody}
+          notes={state.notes}
           onAnother={() => inputRef.current?.click()}
         />
       ) : (
@@ -139,7 +163,11 @@ export function Songs() {
           {busy ? (
             <p className="text-lg" role="status">
               <span className="mr-2 inline-block animate-pulse">🎧</span>
-              {t(state.phase === 'decoding' ? 'songs.decoding' : state.phase === 'chords' ? 'songs.analysing' : 'songs.melodyStage')}
+              {state.phase === 'decoding'
+                ? t('songs.decoding')
+                : state.phase === 'notes'
+                  ? t('songs.notesStage', { n: Math.round(state.progress * 100) })
+                  : t('songs.analysing')}
               <span className="mt-1 block text-sm text-mute">{state.name}</span>
             </p>
           ) : (
@@ -168,21 +196,21 @@ interface ResultProps {
   name: string
   url: string
   prepared: Prepared
-  melody: MelodyNote[]
+  notes: TranscribedNote[]
   onAnother: () => void
 }
 
-function Result({ name, url, prepared, melody, onAnother }: ResultProps) {
+function Result({ name, url, prepared, notes, onAnother }: ResultProps) {
   const t = useT()
   const audioRef = useRef<HTMLAudioElement>(null)
   const [time, setTime] = useState(0)
   const [detail, setDetail] = useState<Detail>('simple')
-  const [showMelody, setShowMelody] = useState(true)
-  const [hearMelody, setHearMelody] = useState(false)
+  const [showNotes, setShowNotes] = useState(true)
+  const [hearNotes, setHearNotes] = useState(false)
   const hearRef = useRef(false)
   useEffect(() => {
-    hearRef.current = hearMelody
-  }, [hearMelody])
+    hearRef.current = hearNotes
+  }, [hearNotes])
 
   const { key, tuningCents, duration } = prepared
   // The heavy work is done once; re-cutting at another level of detail is instant.
@@ -203,7 +231,7 @@ function Result({ name, url, prepared, melody, onAnother }: ResultProps) {
       // Play each detected note as the song reaches it, so the guess can be
       // judged by ear against the real thing. Skipped across seeks.
       if (hearRef.current && audio && !audio.paused && now > last && now - last < 0.3) {
-        for (const note of melody) {
+        for (const note of notes) {
           if (note.start > now) break
           if (note.start > last) playNote(note.midi, 'piano', 0, Math.min(1.5, note.end - note.start))
         }
@@ -213,7 +241,7 @@ function Result({ name, url, prepared, melody, onAnother }: ResultProps) {
     }
     tick()
     return () => cancelAnimationFrame(raf)
-  }, [melody])
+  }, [notes])
 
   const index = Math.max(
     0,
@@ -222,19 +250,18 @@ function Result({ name, url, prepared, melody, onAnother }: ResultProps) {
   const current = segments[index]
   const next = segments.slice(index + 1).find((s) => s.chord)
 
-  // The melody lane is scaled to the notes this song actually uses.
+  // The note lane is scaled to the notes this song actually uses.
   const range = useMemo(() => {
-    if (!melody.length) return null
+    if (!notes.length) return null
     let low = Infinity
     let high = -Infinity
-    for (const note of melody) {
+    for (const note of notes) {
       low = Math.min(low, note.midi)
       high = Math.max(high, note.midi)
     }
     return { low: low - 1, high: high + 1 }
-  }, [melody])
+  }, [notes])
   const noteName = (midi: number) => `${names[midi % 12]}${Math.floor(midi / 12) - 1}`
-  const singing = melody.find((note) => time >= note.start && time < note.end)
 
   const used = useMemo(() => {
     const totals = new Map<string, { chord: ChordLabel; seconds: number }>()
@@ -302,9 +329,6 @@ function Result({ name, url, prepared, melody, onAnother }: ResultProps) {
           <div className="font-display text-6xl font-semibold text-accent" aria-live="off">
             {current?.chord ? label(current.chord) : <span className="text-3xl text-mute">{t('songs.noChord')}</span>}
           </div>
-          {showMelody && range && (
-            <div className="mt-1 min-h-5 text-sm text-mute">{singing ? `♪ ${noteName(singing.midi)}` : ''}</div>
-          )}
         </div>
         <div className="rounded-xl border border-line bg-surface p-5">
           <FieldLabel>{t('songs.next')}</FieldLabel>
@@ -319,11 +343,11 @@ function Result({ name, url, prepared, melody, onAnother }: ResultProps) {
           <div className="flex flex-wrap gap-1.5">
             {range && (
               <>
-                <Chip active={showMelody} onClick={() => setShowMelody((v) => !v)}>
-                  ♪ {t('songs.melody')}
+                <Chip active={showNotes} onClick={() => setShowNotes((v) => !v)}>
+                  ♪ {t('songs.notes')}
                 </Chip>
-                <Chip active={hearMelody} onClick={() => setHearMelody((v) => !v)} title={t('songs.melodyHearHint')}>
-                  🔊 {t('songs.melodyHear')}
+                <Chip active={hearNotes} onClick={() => setHearNotes((v) => !v)} title={t('songs.notesHearHint')}>
+                  🔊 {t('songs.notesHear')}
                 </Chip>
                 <span className="mx-1 w-px self-stretch bg-line" />
               </>
@@ -383,22 +407,25 @@ function Result({ name, url, prepared, melody, onAnother }: ResultProps) {
                     />
                   )}
                 </div>
-                {showMelody && range && (
-                  <div className="relative mt-0.5 mb-1 h-10 rounded-sm bg-ink/60">
-                    {melody.map((note, i) => {
+                {showNotes && range && (
+                  <div className="relative mt-0.5 mb-1 h-20 overflow-hidden rounded-sm bg-ink/60">
+                    {notes.map((note, i) => {
                       if (note.end <= rowStart || note.start >= rowEnd) return null
                       const from = Math.max(note.start, rowStart)
                       const to = Math.min(note.end, rowEnd)
                       const height = (note.midi - range.low) / (range.high - range.low)
+                      const sounding = time >= note.start && time < note.end
                       return (
                         <span
                           key={i}
                           title={`${clock(note.start)} · ${noteName(note.midi)}`}
-                          className={`absolute h-1 rounded-full ${note === singing ? 'bg-root' : 'bg-accent/80'}`}
+                          className={`absolute h-[3px] rounded-full ${sounding ? 'bg-root' : 'bg-accent'}`}
                           style={{
                             left: `${((from - rowStart) / ROW_SECONDS) * 100}%`,
                             width: `max(3px, ${((to - from) / ROW_SECONDS) * 100}%)`,
-                            bottom: `calc(${height * 100}% - 2px)`,
+                            bottom: `calc(${height * 100}% - 1.5px)`,
+                            // Fainter = the model was less sure of the note.
+                            opacity: sounding ? 1 : 0.35 + 0.65 * Math.min(1, note.strength * 1.6),
                           }}
                         />
                       )
@@ -410,9 +437,9 @@ function Result({ name, url, prepared, melody, onAnother }: ResultProps) {
             )
           })}
         </div>
-        {showMelody && range && (
+        {showNotes && range && (
           <p className="mt-2 max-w-2xl text-xs text-mute">
-            {t('songs.melodyLegend', { low: noteName(range.low + 1), high: noteName(range.high - 1) })}
+            {t('songs.notesLegend', { low: noteName(range.low + 1), high: noteName(range.high - 1) })}
           </p>
         )}
       </div>
