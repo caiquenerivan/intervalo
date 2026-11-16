@@ -77,7 +77,7 @@ export const en = {
   'interval.P8': 'Octave',
 
   'ear.title': 'Ear training',
-  'ear.intro': 'Listen, then say what you heard. What you miss comes back sooner.',
+  'ear.intro': 'First get to know each sound, then name it by ear. What you miss comes back sooner.',
   'ear.intervals': 'Intervals',
   'ear.chords': 'Chords',
   'ear.level': 'Level {n}',
@@ -101,6 +101,25 @@ export const en = {
   'ear.level.ch2': 'Adds diminished and augmented',
   'ear.level.ch3': 'Seventh chords',
   'ear.level.ch4': 'Everything mixed',
+
+  'ear.tab.learn': 'Learn',
+  'ear.tab.practice': 'Practise',
+  'ear.learn.intervals':
+    'Meet the sounds of this level before being tested. Every example starts on the same note, so you can compare them directly. Play two cards back and forth until you can tell them apart.',
+  'ear.learn.chords':
+    'Meet the chords of this level before being tested. They are all built on the same root, so the only thing that changes is the colour. Play two cards back and forth until you can tell them apart.',
+  'ear.semitones': '{n} semitones',
+  'ear.thinkOf': 'Think of:',
+  'ear.listenFor': 'Listen for:',
+  'ear.playMelodic': 'One by one',
+  'ear.playHarmonic': 'Together',
+  'ear.onKeyboard': 'On the keyboard: {name}, starting on C',
+  'ear.goPractice': 'I’m ready — test me',
+  'ear.learn.tip': 'Sing the two notes back before moving on. It helps more than it seems.',
+  'ear.compare': 'Compare:',
+  'ear.hearYours': 'What you answered',
+  'ear.hearRight': 'The right answer',
+  'ear.review': 'Review this level’s sounds',
 
   'tuner.title': 'Guitar tuner',
   'tuner.intro': 'Standard tuning, E A D G B E. Pluck one string at a time, close to the microphone.',

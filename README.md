@@ -13,7 +13,7 @@ No account, no backend: everything runs on the device, including the microphone 
 ## What it does
 
 1. **Explore** — pick a root and a chord or scale (11 of each) and see it on a guitar fretboard and a keyboard at the same time, as note names or scale degrees. Every fret and key plays.
-2. **Ear training** — the app plays an interval or a chord and you name it. Four levels each, scheduled with spaced repetition so what you miss comes back sooner.
+2. **Ear training** — each level starts with a short lesson: what every interval or chord feels like, a familiar tune to hang it on, and side-by-side examples from the same starting note. Then the app plays one and you name it. Four levels each, scheduled with spaced repetition so what you miss comes back sooner; after a mistake you can hear your answer against the right one.
 3. **Tuner** — tunes a guitar from the microphone, detecting pitch with the YIN algorithm.
 4. **Lessons** — eight short lessons (notes → intervals → chords → scales) with quizzes, "find this note" exercises and listening rounds. Progress, XP, a daily streak and achievements are saved locally.
 

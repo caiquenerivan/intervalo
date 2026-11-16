@@ -79,7 +79,7 @@ export const pt: Record<Key, string> = {
   'interval.P8': 'Oitava',
 
   'ear.title': 'Treino de ouvido',
-  'ear.intro': 'Ouça e diga o que ouviu. O que você erra volta mais cedo.',
+  'ear.intro': 'Primeiro conheça cada som, depois reconheça de ouvido. O que você erra volta mais cedo.',
   'ear.intervals': 'Intervalos',
   'ear.chords': 'Acordes',
   'ear.level': 'Nível {n}',
@@ -103,6 +103,25 @@ export const pt: Record<Key, string> = {
   'ear.level.ch2': 'Mais diminuto e aumentado',
   'ear.level.ch3': 'Acordes com sétima',
   'ear.level.ch4': 'Tudo misturado',
+
+  'ear.tab.learn': 'Aprender',
+  'ear.tab.practice': 'Praticar',
+  'ear.learn.intervals':
+    'Conheça os sons deste nível antes de ser testado. Todos os exemplos começam na mesma nota, então dá para comparar diretamente. Toque dois cartões alternando até conseguir diferenciar.',
+  'ear.learn.chords':
+    'Conheça os acordes deste nível antes de ser testado. Todos são montados sobre a mesma tônica, então a única coisa que muda é a cor. Toque dois cartões alternando até conseguir diferenciar.',
+  'ear.semitones': '{n} semitons',
+  'ear.thinkOf': 'Pense em:',
+  'ear.listenFor': 'Repare:',
+  'ear.playMelodic': 'Uma por vez',
+  'ear.playHarmonic': 'Juntas',
+  'ear.onKeyboard': 'No teclado: {name}, a partir do C (dó)',
+  'ear.goPractice': 'Estou pronto — me teste',
+  'ear.learn.tip': 'Cante as duas notas antes de seguir. Ajuda mais do que parece.',
+  'ear.compare': 'Compare:',
+  'ear.hearYours': 'O que você respondeu',
+  'ear.hearRight': 'A resposta certa',
+  'ear.review': 'Rever os sons deste nível',
 
   'tuner.title': 'Afinador de violão',
   'tuner.intro': 'Afinação padrão, E A D G B E. Toque uma corda por vez, perto do microfone.',
