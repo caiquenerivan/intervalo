@@ -72,12 +72,27 @@ interface Preset {
   changePenalty: number
   /** Segments shorter than this (seconds) are absorbed by their neighbour. */
   minSegment: number
+  /**
+   * A chord shorter than this that sits between two stretches of the same
+   * chord (E – C♯m – E) is a candidate fill: on a real recording that is
+   * usually a guitar lick or a bass run over the held chord, not a change of
+   * harmony. It is dropped when its notes fit the chord poorly (see
+   * FILL_MAX_FIT). 0 keeps everything.
+   */
+  passing: number
 }
 
 const PRESETS: Record<Detail, Preset> = {
-  simple: { smooth: 12, changePenalty: 1.2, minSegment: 1.2 }, // ≈ ±1.1 s
-  detailed: { smooth: 6, changePenalty: 0.5, minSegment: 0.6 }, // ≈ ±0.55 s
+  simple: { smooth: 12, changePenalty: 1.2, minSegment: 1.2, passing: 2.6 }, // ≈ ±1.1 s
+  detailed: { smooth: 6, changePenalty: 0.5, minSegment: 0.6, passing: 0 }, // ≈ ±0.55 s
 }
+
+/**
+ * How well a candidate fill must match its chord (cosine, 0–1) to be kept.
+ * A real chord has its three notes and little else; a lick read as a chord
+ * has two of them plus loud notes from outside it.
+ */
+const FILL_MAX_FIT = 0.7
 
 /** Extra score for chords that belong to the song's key. */
 const KEY_BONUS = 0.1
@@ -340,6 +355,51 @@ function toSegments(path: number[], sampleRate: number, duration: number, minSeg
   return merged.map(({ start, end, state }) => ({ start, end, chord: labelOf(state) }))
 }
 
+const sameChord = (a: ChordLabel | null, b: ChordLabel | null) =>
+  !!a && !!b && a.root === b.root && a.minor === b.minor
+
+/** Cosine match between a chord and the average chroma of a stretch of the song. */
+function chordFit(p: Prepared, seg: Segment): number {
+  if (!seg.chord) return 0
+  const frameTime = HOP / p.sampleRate
+  const centre = FFT_SIZE / 2 / p.sampleRate
+  const { chroma } = p.features
+  const from = Math.max(0, Math.round((seg.start - centre) / frameTime))
+  const to = Math.min(chroma.length, Math.round((seg.end - centre) / frameTime))
+  const mean = new Float32Array(12)
+  for (let f = from; f < to; f++) for (let pc = 0; pc < 12; pc++) mean[pc] += chroma[f][pc]
+  const { root, minor } = seg.chord
+  const tones = mean[root] + mean[(root + (minor ? 3 : 4)) % 12] + mean[(root + 7) % 12]
+  return tones / ((Math.hypot(...mean) || 1) * TEMPLATE_NORM)
+}
+
+/** Folds A – x – A into one A when x is a short, poorly fitting fill. Silence is never folded away. */
+function absorbPassing(p: Prepared, segments: Segment[], maxLength: number): Segment[] {
+  if (maxLength <= 0) return segments
+  const out: Segment[] = []
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]
+    const before = out[out.length - 1]
+    const after = segments[i + 1]
+    const isFill =
+      before &&
+      after &&
+      seg.chord &&
+      seg.end - seg.start < maxLength &&
+      sameChord(before.chord, after.chord) &&
+      chordFit(p, seg) < FILL_MAX_FIT
+    if (isFill) {
+      before.end = after.end
+      i++ // `after` is now part of `before`
+    } else if (before && sameChord(before.chord, seg.chord)) {
+      before.end = seg.end
+    } else {
+      out.push({ ...seg })
+    }
+  }
+  return out
+}
+
 // Krumhansl–Kessler key profiles: how strongly each scale degree is felt to
 // belong to a major / minor key, from listening experiments.
 const MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
@@ -404,7 +464,7 @@ export function prepare(samples: Float32Array, sampleRate: number): Prepared {
 export function segment(p: Prepared, detail: Detail = 'simple'): Segment[] {
   const preset = PRESETS[detail]
   const path = viterbi(scoreFrames(p.features, p.key, preset.smooth), preset.changePenalty)
-  return toSegments(path, p.sampleRate, p.duration, preset.minSegment)
+  return absorbPassing(p, toSegments(path, p.sampleRate, p.duration, preset.minSegment), preset.passing)
 }
 
 export function analyseChords(samples: Float32Array, sampleRate: number, detail: Detail = 'simple'): Analysis {

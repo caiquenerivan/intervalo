@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyseChords, chordName, fft, type Analysis } from './chords'
+import { analyseChords, chordName, fft, prepare, segment, type Analysis } from './chords'
 import { SHARP_NAMES } from '../theory/notes'
 
 const SR = 11025
@@ -120,6 +120,21 @@ describe('analyseChords', () => {
     const audio = song([C, C, F, F])
     addMelody(audio, [76, 79, 83, 79, 76, 79, 83, 79, 81, 84, 88, 84, 81, 84, 88, 84, 81, 84, 81, 77, 81, 84, 81, 77, 79, 76, 79, 84, 79, 76, 72, 76])
     expect(names(analyseChords(audio, SR))).toBe('C F')
+  })
+
+  it('in simple mode, drops a lick that is read as a chord and returns to the same chord', () => {
+    const audio = song([C, C, C, C, C])
+    // 1.5 s of A and B notes over the held C: two notes of A minor's neighbourhood, never the full chord.
+    addMelody(audio, new Array(16).fill(0).concat([45, 47, 45, 47, 45, 47]), 0.25, 0.9)
+    const p = prepare(audio, SR)
+    const read = (detail: 'simple' | 'detailed') =>
+      segment(p, detail).map((s) => (s.chord ? chordName(s.chord, SHARP_NAMES) : '-')).join(' ')
+    expect(read('detailed')).not.toBe('C')
+    expect(read('simple')).toBe('C')
+  })
+
+  it('keeps a short but complete chord, even between two of the same', () => {
+    expect(names(analyseChords(song([C, C, Am, C, C]), SR))).toBe('C Am C')
   })
 
   it('reports no chord for silence between chords', () => {

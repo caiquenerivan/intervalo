@@ -94,6 +94,8 @@ Finding one pitch (the tuner) and finding a chord in a full mix are different pr
 
 There are two levels of detail, **Simple** and **Detailed**, which differ in the median window, the change cost and the shortest chord allowed. Without beat tracking there is no single right answer — a bass run between two chords is a chord at one setting and a passing note at the other — so the choice is left to the person. The spectral work is done once (`prepare`), and re-cutting at the other level (`segment`) is instant.
 
+Simple also drops **fills**: a short chord sandwiched between two stretches of the same chord (E – C♯m – E) whose notes fit the chord poorly. On the recording used for tuning this, those were a guitar walk-down in the bass (E–D♯–C♯ with no G♯), not a C♯m. A short chord that is complete — all three notes, little else — is kept.
+
 The key comes from correlating the song's total chroma with the Krumhansl–Kessler key profiles.
 
 **Limits, stated plainly:** it only knows major and minor triads (G7 shows as G), it has no notion of bars or beats, and the automated tests use synthesised progressions (with a louder melody and drums on top, a detuned one), and beyond that it has been checked by ear on a single real recording, not measured against annotated data. Expect it to do well on clear guitar or piano and to struggle with heavy distortion.
