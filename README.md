@@ -9,6 +9,7 @@ No account, no backend: everything runs on the device, including the microphone 
 |---|---|
 | ![Home](docs/home.jpg) | ![Chord and scale explorer](docs/explore.jpg) |
 | ![Ear training](docs/ear-training.jpg) | ![Tuner](docs/tuner.jpg) |
+| ![Chords from a song](docs/songs.jpg) | ![Lesson](docs/lesson.jpg) |
 
 ## What it does
 
@@ -16,6 +17,7 @@ No account, no backend: everything runs on the device, including the microphone 
 2. **Ear training** — each level starts with a short lesson: what every interval or chord feels like, a familiar tune to hang it on, and side-by-side examples from the same starting note. Then the app plays one and you name it. Four levels each, scheduled with spaced repetition so what you miss comes back sooner; after a mistake you can hear your answer against the right one.
 3. **Tuner** — tunes a guitar from the microphone, detecting pitch with the YIN algorithm.
 4. **Lessons** — eight short lessons (notes → intervals → chords → scales) with quizzes, "find this note" exercises and listening rounds. Progress, XP, a daily streak and achievements are saved locally.
+5. **Songs** — drop in an MP3 (or WAV, M4A, OGG) and get its chords on a timeline that follows the playback, plus the likely key and how far the recording is from standard tuning. Major and minor chords only.
 
 The interface is in English and Portuguese.
 
@@ -39,14 +41,14 @@ React 19 · TypeScript · Vite · Tailwind CSS 4 · Zustand (persisted to `local
 ```
 src/
   theory/      notes, intervals, chord/scale formulas, instrument maps — pure functions
-  audio/       pitch.ts (YIN), synth.ts (Karplus–Strong guitar, additive piano)
+  audio/       pitch.ts (YIN), chords.ts (chord recognition), synth.ts (Karplus–Strong guitar, additive piano)
   store/       progress store, spaced repetition, streak, achievements
   components/  Fretboard and Keyboard (SVG), shared UI
-  features/    explorer · ear · tuner · lessons · home
+  features/    explorer · ear · tuner · lessons · songs · home
   i18n/        en.ts, pt.ts
 ```
 
-Everything that is logic rather than pixels (`theory/`, `audio/pitch.ts`, `store/srs.ts`, `store/streak.ts`) is pure and unit-tested.
+Everything that is logic rather than pixels (`theory/`, `audio/pitch.ts`, `audio/chords.ts`, `store/srs.ts`, `store/streak.ts`) is pure and unit-tested.
 
 ## Technical decisions
 
@@ -78,6 +80,23 @@ The window is 4096 samples (≈85 ms, about 7 periods of low E). The inner loop 
 
 Tests feed the detector pure tones, a tone whose 2nd harmonic is louder than the fundamental, noisy signals and synthesised plucked strings for all six open strings.
 
+### Chords from a recording
+
+Finding one pitch (the tuner) and finding a chord in a full mix are different problems: YIN assumes a single periodic source, and a song is many at once. [`chords.ts`](src/audio/chords.ts) uses the classic chroma approach instead:
+
+1. **Decode at 11 kHz.** Chords live below ~2 kHz. `decodeAudioData` on an `OfflineAudioContext` created at 11 025 Hz resamples for free, so there is a quarter of the data and each 4096-sample FFT window spans 0.37 s — bins 2.7 Hz apart, enough to separate semitones down to C2.
+2. **Spectral peaks.** Each frame keeps only its local maxima between 65 Hz and 2.1 kHz, with parabolic interpolation for the exact frequency. This drops the noise floor and most of the drums.
+3. **Tuning correction.** Recordings are often not at A = 440. The deviation of every peak from its nearest semitone is averaged as a circular mean (it is an angle: +50 and −50 cents are the same place) and removed before rounding to notes.
+4. **Chroma.** Peaks are folded into 12 pitch classes, ignoring the octave.
+5. **Template matching.** Each frame is compared (cosine similarity) with the root–third–fifth pattern of the 24 major and minor triads, plus a "no chord" state.
+6. **Viterbi smoothing.** Picking the best chord per frame flickers on every passing note. Viterbi finds the sequence with the best total score while charging a fixed cost per chord change, which is what makes the output read like a chord chart.
+
+The key comes from correlating the song's total chroma with the Krumhansl–Kessler key profiles.
+
+**Limits, stated plainly:** it only knows major and minor triads (G7 shows as G), it has no notion of bars or beats, and it has only been verified on synthesised progressions — including a detuned one and an MP3 round trip — not measured against annotated real recordings. Expect it to do well on clear guitar or piano and to struggle with heavy distortion.
+
+The analysis runs on the main thread after decoding: about a second for a short clip. A long song would be better off in a Web Worker.
+
 ### Sound without samples
 
 No audio files are shipped. Guitar notes use **Karplus–Strong** synthesis: a burst of noise loops through a delay line one period long and is low-pass filtered on every pass — which is roughly what a plucked string does. A fractional delay keeps high notes in tune. Piano notes are five decaying sine partials with slight inharmonic stretch. See [`synth.ts`](src/audio/synth.ts).
@@ -98,6 +117,7 @@ Chords and scales are spelled with sharps or flats according to the key signatur
 
 ## Not in this version
 
-- Recognising chords played live, and following along with songs. Polyphonic detection is a different problem from finding one pitch (YIN assumes a single periodic source).
+- Recognising chords played live on the microphone, and following along with songs.
+- Seventh and extended chords, beat/bar detection and lyrics in the song analysis.
 - Alternate tunings and a chromatic tuner mode.
 - Accounts and cross-device sync.

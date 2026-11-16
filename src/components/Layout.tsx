@@ -10,6 +10,7 @@ const NAV: { to: string; key: Key }[] = [
   { to: '/explore', key: 'nav.explore' },
   { to: '/ear', key: 'nav.ear' },
   { to: '/tuner', key: 'nav.tuner' },
+  { to: '/songs', key: 'nav.songs' },
 ]
 
 export function Layout() {
