@@ -26,9 +26,14 @@ export interface Segment {
   chord: ChordLabel | null
 }
 
+export interface Key {
+  tonic: number
+  minor: boolean
+}
+
 export interface Analysis {
   segments: Segment[]
-  key: { tonic: number; minor: boolean }
+  key: Key
   /** How far the recording sits from A = 440 Hz, in cents. */
   tuningCents: number
   duration: number
@@ -50,18 +55,34 @@ const BASS_CEILING = 180
 /** How much the bass note counts toward choosing the root. */
 const BASS_WEIGHT = 0.35
 /**
- * Frames on each side for the median filter (≈ ±0.75 s). A chord tone is
- * there for the whole chord; a melody note is gone in a fraction of a second
- * and the median simply never sees it.
+ * How finely to cut the song into chords. Without knowing where the beats
+ * are, there is no single right answer: a bass run between two chords is a
+ * "chord" at one setting and a passing note at another.
  */
-const SMOOTH = 8
-/** Cost of changing chord between frames; higher = fewer, longer chords. */
-const CHANGE_PENALTY = 0.6
+export type Detail = 'simple' | 'detailed'
+
+interface Preset {
+  /**
+   * Frames on each side for the median filter. A chord tone is there for the
+   * whole chord; a melody or passing bass note is gone in a fraction of a
+   * second and the median simply never sees it.
+   */
+  smooth: number
+  /** Cost of changing chord between frames; higher = fewer, longer chords. */
+  changePenalty: number
+  /** Segments shorter than this (seconds) are absorbed by their neighbour. */
+  minSegment: number
+}
+
+const PRESETS: Record<Detail, Preset> = {
+  simple: { smooth: 12, changePenalty: 1.2, minSegment: 1.2 }, // ≈ ±1.1 s
+  detailed: { smooth: 6, changePenalty: 0.5, minSegment: 0.6 }, // ≈ ±0.55 s
+}
+
+/** Extra score for chords that belong to the song's key. */
+const KEY_BONUS = 0.1
 /** Score given to "no chord"; a real chord has to beat it. */
 const NO_CHORD_SCORE = 0.55
-/** Segments shorter than this are absorbed by their neighbour. */
-const MIN_SEGMENT = 0.75
-
 /** In-place radix-2 FFT. `re`/`im` must have a power-of-two length. */
 export function fft(re: Float32Array, im: Float32Array): void {
   const n = re.length
@@ -208,7 +229,19 @@ const NO_CHORD = 24
 const labelOf = (state: number): ChordLabel | null =>
   state === NO_CHORD ? null : { root: state % 12, minor: state >= 12 }
 
-function scoreFrames({ chroma, bass, energy }: Chroma): Float32Array[] {
+/** The six triads built on the notes of a key (plus the major V in minor keys). */
+function diatonicStates(key: Key): Set<number> {
+  const degrees: [number, boolean][] = key.minor
+    ? [[0, true], [3, false], [5, true], [7, true], [7, false], [8, false], [10, false]]
+    : [[0, false], [2, true], [4, true], [5, false], [7, false], [9, true]]
+  return new Set(degrees.map(([interval, minor]) => ((key.tonic + interval) % 12) + (minor ? 12 : 0)))
+}
+
+function scoreFrames({ chroma, bass, energy }: Chroma, key: Key, smooth: number): Float32Array[] {
+  // A song mostly uses the chords of its key. This does not forbid the
+  // others, it just asks for clearer evidence before showing one.
+  const inKey = diatonicStates(key)
+
   // Anything far below the song's typical level is treated as silence.
   const sorted = Array.from(energy).sort((a, b) => a - b)
   const quiet = sorted[Math.floor(sorted.length * 0.9)] * 0.03
@@ -222,8 +255,8 @@ function scoreFrames({ chroma, bass, energy }: Chroma): Float32Array[] {
       scores[NO_CHORD] = 1
       return scores
     }
-    const from = Math.max(0, f - SMOOTH)
-    const to = Math.min(chroma.length - 1, f + SMOOTH)
+    const from = Math.max(0, f - smooth)
+    const to = Math.min(chroma.length - 1, f + smooth)
     low.fill(0)
     for (let pc = 0; pc < 12; pc++) {
       column.length = 0
@@ -243,6 +276,7 @@ function scoreFrames({ chroma, bass, energy }: Chroma): Float32Array[] {
       scores[root] = (steady[root] + steady[(root + 4) % 12] + fifth) / (norm * TEMPLATE_NORM) + bassVote
       scores[root + 12] = (steady[root] + steady[(root + 3) % 12] + fifth) / (norm * TEMPLATE_NORM) + bassVote
     }
+    for (const state of inKey) scores[state] += KEY_BONUS
     scores[NO_CHORD] = NO_CHORD_SCORE
     return scores
   })
@@ -253,7 +287,7 @@ function scoreFrames({ chroma, bass, energy }: Chroma): Float32Array[] {
  * every change. Frame-by-frame "best match" flickers on every passing note;
  * this is what makes the result read like a chord chart.
  */
-function viterbi(scores: Float32Array[]): number[] {
+function viterbi(scores: Float32Array[], changePenalty: number): number[] {
   const frames = scores.length
   if (!frames) return []
   let best = Float32Array.from(scores[0])
@@ -266,7 +300,7 @@ function viterbi(scores: Float32Array[]): number[] {
     for (let s = 0; s < STATES; s++) {
       // Either stay on the same chord, or jump from the best one and pay.
       const stay = best[s]
-      const jump = best[top] - CHANGE_PENALTY
+      const jump = best[top] - changePenalty
       back[s] = stay >= jump ? s : top
       next[s] = Math.max(stay, jump) + scores[f][s]
     }
@@ -284,7 +318,7 @@ function viterbi(scores: Float32Array[]): number[] {
   return path
 }
 
-function toSegments(path: number[], sampleRate: number, duration: number): Segment[] {
+function toSegments(path: number[], sampleRate: number, duration: number, minSegment: number): Segment[] {
   const frameTime = HOP / sampleRate
   // A frame describes the window centred on it, not the instant it starts.
   const centre = FFT_SIZE / 2 / sampleRate
@@ -300,7 +334,7 @@ function toSegments(path: number[], sampleRate: number, duration: number): Segme
   const merged: typeof raw = []
   for (const seg of raw) {
     const last = merged[merged.length - 1]
-    if (last && (seg.end - seg.start < MIN_SEGMENT || last.state === seg.state)) last.end = seg.end
+    if (last && (seg.end - seg.start < minSegment || last.state === seg.state)) last.end = seg.end
     else merged.push({ ...seg })
   }
   return merged.map(({ start, end, state }) => ({ start, end, chord: labelOf(state) }))
@@ -326,10 +360,10 @@ function correlation(a: number[], b: number[]): number {
   return da && db ? num / Math.sqrt(da * db) : 0
 }
 
-function estimateKey(chroma: Float32Array[]): { tonic: number; minor: boolean } {
+function estimateKey(chroma: Float32Array[]): Key {
   const total = new Array<number>(12).fill(0)
   for (const frame of chroma) for (let pc = 0; pc < 12; pc++) total[pc] += frame[pc]
-  let best = { tonic: 0, minor: false }
+  let best: Key = { tonic: 0, minor: false }
   let bestScore = -Infinity
   for (let tonic = 0; tonic < 12; tonic++) {
     const rotated = total.map((_, i) => total[(i + tonic) % 12])
@@ -344,19 +378,38 @@ function estimateKey(chroma: Float32Array[]): { tonic: number; minor: boolean } 
   return best
 }
 
+/** Everything worked out from the audio once; cutting it into chords again is then instant. */
+export interface Prepared {
+  features: Chroma
+  key: Key
+  tuningCents: number
+  duration: number
+  sampleRate: number
+}
+
 /** `samples` is mono. A low sample rate (≈ 11 kHz) is enough and much faster. */
-export function analyseChords(samples: Float32Array, sampleRate: number): Analysis {
-  const duration = samples.length / sampleRate
+export function prepare(samples: Float32Array, sampleRate: number): Prepared {
   const peaks = findPeaks(samples, sampleRate)
   const tuning = estimateTuning(peaks)
   const features = chromagram(peaks, tuning)
-  const path = viterbi(scoreFrames(features))
   return {
-    segments: toSegments(path, sampleRate, duration),
+    features,
     key: estimateKey(features.chroma),
     tuningCents: tuning * 100,
-    duration,
+    duration: samples.length / sampleRate,
+    sampleRate,
   }
+}
+
+export function segment(p: Prepared, detail: Detail = 'simple'): Segment[] {
+  const preset = PRESETS[detail]
+  const path = viterbi(scoreFrames(p.features, p.key, preset.smooth), preset.changePenalty)
+  return toSegments(path, p.sampleRate, p.duration, preset.minSegment)
+}
+
+export function analyseChords(samples: Float32Array, sampleRate: number, detail: Detail = 'simple'): Analysis {
+  const p = prepare(samples, sampleRate)
+  return { segments: segment(p, detail), key: p.key, tuningCents: p.tuningCents, duration: p.duration }
 }
 
 export function chordName(chord: ChordLabel, noteNames: string[]): string {

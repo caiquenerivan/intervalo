@@ -158,7 +158,11 @@ export const en = {
   'songs.next': 'Next',
   'songs.noChord': 'no chord',
   'songs.used': 'Chords in this song',
-  'songs.timeline': 'Timeline — click a chord to jump there',
+  'songs.timeline': 'Chord chart — click a chord to jump there',
+  'songs.simple': 'Simple',
+  'songs.detailed': 'Detailed',
+  'songs.simpleHint': 'Main chords only: short passing chords are left out',
+  'songs.detailedHint': 'Every change it hears, including quick passing chords and bass runs',
   'songs.another': 'Choose another file',
   'songs.limits':
     'This is an estimate, not a transcription. It hears only major and minor chords, so a G7 shows as G and a Cmaj7 as C or Em. It works best on recordings where guitar or piano is clear, and worse with heavy distortion or loud drums.',

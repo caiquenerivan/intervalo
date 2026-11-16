@@ -161,7 +161,11 @@ export const pt: Record<Key, string> = {
   'songs.next': 'Próximo',
   'songs.noChord': 'sem acorde',
   'songs.used': 'Acordes desta música',
-  'songs.timeline': 'Linha do tempo — clique num acorde para ir até ele',
+  'songs.timeline': 'Cifra no tempo — clique num acorde para ir até ele',
+  'songs.simple': 'Simples',
+  'songs.detailed': 'Detalhada',
+  'songs.simpleHint': 'Só os acordes principais: os de passagem ficam de fora',
+  'songs.detailedHint': 'Toda mudança que o app ouve, incluindo acordes de passagem e baixos caminhando',
   'songs.another': 'Escolher outro arquivo',
   'songs.limits':
     'Isto é uma estimativa, não uma transcrição. O app só ouve acordes maiores e menores, então um G7 aparece como G e um Cmaj7 como C ou Em. Funciona melhor em gravações com violão ou piano claros, e pior com muita distorção ou bateria alta.',

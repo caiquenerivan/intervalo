@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
-import { analyseChords, chordName, type Analysis, type ChordLabel } from '../../audio/chords'
+import { chordName, prepare, segment, type ChordLabel, type Detail, type Prepared } from '../../audio/chords'
 import { playChord } from '../../audio/synth'
 import { ChordBox } from '../../components/ChordBox'
-import { Button, FieldLabel, PageHeader } from '../../components/ui'
+import { Button, Chip, FieldLabel, PageHeader } from '../../components/ui'
 import { useT } from '../../i18n'
 import { GUITAR_TUNING } from '../../theory/instruments'
 import { FLAT_NAMES, SHARP_NAMES, prefersFlats } from '../../theory/notes'
@@ -14,7 +14,8 @@ import { chordShape } from '../../theory/shapes'
  */
 const ANALYSIS_RATE = 11025
 const MAX_MB = 60
-const PX_PER_SECOND = 44
+/** Seconds of music per row of the chart. Rows instead of one long strip: the whole song fits on screen. */
+const ROW_SECONDS = 20
 /** A chord heard for less than this share of the song is left out of the summary: usually a misreading. */
 const MIN_SHARE = 0.03
 
@@ -22,7 +23,7 @@ type State =
   | { phase: 'idle' }
   | { phase: 'decoding' | 'analysing'; name: string }
   | { phase: 'error'; message: string }
-  | { phase: 'done'; name: string; url: string; analysis: Analysis }
+  | { phase: 'done'; name: string; url: string; prepared: Prepared }
 
 async function decodeToMono(file: File): Promise<Float32Array> {
   // decodeAudioData resamples to the context's rate, so an offline context
@@ -62,8 +63,8 @@ export function Songs() {
       setState({ phase: 'analysing', name: file.name })
       // Let the "analysing" message paint before the main thread gets busy.
       await new Promise((resolve) => setTimeout(resolve, 30))
-      const analysis = analyseChords(mono, ANALYSIS_RATE)
-      setState({ phase: 'done', name: file.name, url: URL.createObjectURL(file), analysis })
+      const prepared = prepare(mono, ANALYSIS_RATE)
+      setState({ phase: 'done', name: file.name, url: URL.createObjectURL(file), prepared })
     } catch {
       setState({ phase: 'error', message: t('songs.error') })
     }
@@ -97,7 +98,7 @@ export function Songs() {
           key={state.url}
           name={state.name}
           url={state.url}
-          analysis={state.analysis}
+          prepared={state.prepared}
           onAnother={() => inputRef.current?.click()}
         />
       ) : (
@@ -143,17 +144,19 @@ export function Songs() {
 interface ResultProps {
   name: string
   url: string
-  analysis: Analysis
+  prepared: Prepared
   onAnother: () => void
 }
 
-function Result({ name, url, analysis, onAnother }: ResultProps) {
+function Result({ name, url, prepared, onAnother }: ResultProps) {
   const t = useT()
   const audioRef = useRef<HTMLAudioElement>(null)
-  const stripRef = useRef<HTMLDivElement>(null)
   const [time, setTime] = useState(0)
+  const [detail, setDetail] = useState<Detail>('simple')
 
-  const { segments, key, tuningCents, duration } = analysis
+  const { key, tuningCents, duration } = prepared
+  // The heavy work is done once; re-cutting at another level of detail is instant.
+  const segments = useMemo(() => segment(prepared, detail), [prepared, detail])
   // Spell the chords the way the song's key would: B♭ in F major, A♯ never.
   const names = prefersFlats(key.tonic, key.minor) ? FLAT_NAMES : SHARP_NAMES
   const label = (chord: ChordLabel | null) => (chord ? chordName(chord, names) : '—')
@@ -177,16 +180,6 @@ function Result({ name, url, analysis, onAnother }: ResultProps) {
   )
   const current = segments[index]
   const next = segments.slice(index + 1).find((s) => s.chord)
-
-  // Keep the playhead in view without fighting someone who is scrolling by hand.
-  const playheadX = time * PX_PER_SECOND
-  useEffect(() => {
-    const strip = stripRef.current
-    if (!strip) return
-    if (playheadX < strip.scrollLeft || playheadX > strip.scrollLeft + strip.clientWidth - 60) {
-      strip.scrollLeft = Math.max(0, playheadX - 60)
-    }
-  }, [playheadX])
 
   const used = useMemo(() => {
     const totals = new Map<string, { chord: ChordLabel; seconds: number }>()
@@ -263,38 +256,66 @@ function Result({ name, url, analysis, onAnother }: ResultProps) {
       </div>
 
       <div className="mt-5">
-        <FieldLabel>{t('songs.timeline')}</FieldLabel>
-        <div ref={stripRef} className="overflow-x-auto rounded-xl border border-line bg-surface">
-          <div className="relative h-20" style={{ width: Math.max(1, duration) * PX_PER_SECOND }}>
-            {segments.map((s, i) => (
-              <button
-                key={i}
-                type="button"
-                onClick={() => seek(s.start)}
-                title={`${clock(s.start)} · ${label(s.chord)}`}
-                className={`absolute top-2 bottom-6 overflow-hidden rounded-md border text-sm font-bold transition ${
-                  i === index
-                    ? 'border-accent bg-accent text-ink'
-                    : s.chord
-                      ? 'border-line bg-raised hover:border-mute'
-                      : 'border-transparent text-mute'
-                }`}
-                style={{ left: s.start * PX_PER_SECOND + 1, width: Math.max(2, (s.end - s.start) * PX_PER_SECOND - 2) }}
-              >
-                {s.chord ? label(s.chord) : ''}
-              </button>
-            ))}
-            {Array.from({ length: Math.floor(duration / 10) + 1 }, (_, i) => (
-              <span
-                key={i}
-                className="absolute bottom-1 text-[10px] text-mute tabular-nums"
-                style={{ left: i * 10 * PX_PER_SECOND + 3 }}
-              >
-                {clock(i * 10)}
-              </span>
-            ))}
-            <div className="pointer-events-none absolute top-0 bottom-0 w-0.5 bg-root" style={{ left: playheadX }} />
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="text-xs font-bold tracking-widest text-mute uppercase">{t('songs.timeline')}</div>
+          <div className="flex gap-1.5">
+            <Chip active={detail === 'simple'} onClick={() => setDetail('simple')} title={t('songs.simpleHint')}>
+              {t('songs.simple')}
+            </Chip>
+            <Chip active={detail === 'detailed'} onClick={() => setDetail('detailed')} title={t('songs.detailedHint')}>
+              {t('songs.detailed')}
+            </Chip>
           </div>
+        </div>
+        <div className="grid gap-1 rounded-xl border border-line bg-surface p-2">
+          {Array.from({ length: Math.ceil(duration / ROW_SECONDS) }, (_, row) => {
+            const rowStart = row * ROW_SECONDS
+            const rowEnd = rowStart + ROW_SECONDS
+            const inRow = time >= rowStart && time < rowEnd
+            return (
+              <div key={row} className="flex items-center gap-2">
+                <span className={`w-9 shrink-0 text-right text-xs tabular-nums ${inRow ? 'font-bold text-accent' : 'text-mute'}`}>
+                  {clock(rowStart)}
+                </span>
+                <div className="relative h-9 flex-1">
+                  {segments.map((s, i) => {
+                    // A chord that crosses the end of a row is drawn in both rows.
+                    const from = Math.max(s.start, rowStart)
+                    const to = Math.min(s.end, rowEnd)
+                    if (to <= from) return null
+                    const continues = s.start < rowStart
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => seek(from)}
+                        title={`${clock(s.start)} · ${label(s.chord)}`}
+                        className={`absolute inset-y-0 overflow-hidden rounded-md border px-1.5 text-left text-sm font-bold whitespace-nowrap transition ${
+                          i === index
+                            ? 'border-accent bg-accent text-ink'
+                            : s.chord
+                              ? 'border-line bg-raised hover:border-mute'
+                              : 'border-transparent'
+                        }`}
+                        style={{
+                          left: `calc(${((from - rowStart) / ROW_SECONDS) * 100}% + 1px)`,
+                          width: `calc(${((to - from) / ROW_SECONDS) * 100}% - 2px)`,
+                        }}
+                      >
+                        {s.chord && <span className={continues ? 'opacity-40' : ''}>{label(s.chord)}</span>}
+                      </button>
+                    )
+                  })}
+                  {inRow && (
+                    <div
+                      className="pointer-events-none absolute inset-y-0 w-0.5 bg-root"
+                      style={{ left: `${((time - rowStart) / ROW_SECONDS) * 100}%` }}
+                    />
+                  )}
+                </div>
+              </div>
+            )
+          })}
         </div>
       </div>
 
