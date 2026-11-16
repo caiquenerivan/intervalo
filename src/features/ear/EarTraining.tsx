@@ -3,7 +3,25 @@ import { Button, Chip, Meter, PageHeader } from '../../components/ui'
 import { useT, type Key } from '../../i18n'
 import { MAX_BOX, mastery, pickNext } from '../../store/srs'
 import { useStore } from '../../store/useStore'
-import { LEVELS, cardId, labelKey, makeQuestion, playQuestion, type EarKind, type Question } from './questions'
+import { Learn } from './Learn'
+import {
+  LEVELS,
+  cardId,
+  labelKey,
+  makeQuestion,
+  playQuestion,
+  withItem,
+  type EarKind,
+  type Question,
+} from './questions'
+
+type Tab = 'learn' | 'practice'
+
+/** A level opens on the lesson until every sound in it has been heard in a test at least once. */
+function startingTab(kind: EarKind, levelIndex: number): Tab {
+  const cards = useStore.getState().cards
+  return LEVELS[kind][levelIndex].items.every((item) => cardId(kind, item) in cards) ? 'practice' : 'learn'
+}
 
 const MODE_KEY: Record<string, Key> = {
   asc: 'ear.ascending',
@@ -19,6 +37,7 @@ export function EarTraining() {
 
   const [kind, setKind] = useState<EarKind>('interval')
   const [levelIndex, setLevelIndex] = useState(0)
+  const [tab, setTab] = useState<Tab>(() => startingTab('interval', 0))
   const [question, setQuestion] = useState<Question | null>(null)
   const [chosen, setChosen] = useState<string | null>(null)
   const [session, setSession] = useState({ correct: 0, total: 0 })
@@ -30,6 +49,7 @@ export function EarTraining() {
   const reset = (k: EarKind, l: number) => {
     setKind(k)
     setLevelIndex(l)
+    setTab(startingTab(k, l))
     setQuestion(null)
     setChosen(null)
   }
@@ -95,7 +115,27 @@ export function EarTraining() {
         </div>
       </div>
 
-      <div className="mt-6 rounded-xl border border-line bg-surface p-5 text-center sm:p-8">
+      <div className="mt-6 mb-4 flex gap-5 border-b border-line" role="tablist">
+        {(['learn', 'practice'] as const).map((name) => (
+          <button
+            key={name}
+            type="button"
+            role="tab"
+            aria-selected={tab === name}
+            onClick={() => setTab(name)}
+            className={`-mb-px border-b-2 pb-2 text-sm font-bold tracking-widest uppercase ${
+              tab === name ? 'border-accent text-text' : 'border-transparent text-mute hover:text-text'
+            }`}
+          >
+            {t(name === 'learn' ? 'ear.tab.learn' : 'ear.tab.practice')}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'learn' ? (
+        <Learn kind={kind} items={level.items} onPractice={() => setTab('practice')} />
+      ) : (
+      <div className="rounded-xl border border-line bg-surface p-5 text-center sm:p-8">
         {!question ? (
           <Button onClick={ask} className="px-8 py-3 text-base">
             ▶ {t('ear.begin')}
@@ -154,11 +194,31 @@ export function EarTraining() {
                 </>
               )}
             </div>
+
+            {/* The moment after a mistake is when the ear learns: hear both, same starting note. */}
+            {chosen !== null && !isRight && (
+              <div className="pop mt-3 flex flex-wrap items-center justify-center gap-2 text-sm">
+                <span className="text-mute">{t('ear.compare')}</span>
+                <Button variant="ghost" onClick={() => playQuestion(withItem(question, chosen), voice)}>
+                  ▶ {t('ear.hearYours')} · {t(labelKey(kind, chosen))}
+                </Button>
+                <Button variant="ghost" onClick={() => playQuestion(question, voice)}>
+                  ▶ {t('ear.hearRight')} · {t(labelKey(kind, question.item))}
+                </Button>
+              </div>
+            )}
           </>
         )}
         {session.total > 0 && <p className="mt-4 text-sm text-mute">{t('ear.session', session)}</p>}
+        {question && (
+          <p className="mt-3">
+            <button type="button" onClick={() => setTab('learn')} className="text-sm text-mute underline hover:text-text">
+              {t('ear.review')}
+            </button>
+          </p>
+        )}
       </div>
-
+      )}
     </div>
   )
 }

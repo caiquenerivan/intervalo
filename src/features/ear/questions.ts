@@ -63,6 +63,14 @@ export function makeQuestion(
   return { kind, item, mode, midis: mode === 'desc' ? pair.reverse() : pair }
 }
 
+/** The same question (same starting note, same direction) with another sound — for A/B comparison. */
+export function withItem(q: Question, item: string): Question {
+  const root = Math.min(...q.midis)
+  if (q.kind === 'chord') return { ...q, item, midis: chordById(item).intervals.map((i) => root + i) }
+  const pair = [root, root + intervalById(item).semitones]
+  return { ...q, item, midis: q.mode === 'desc' ? pair.reverse() : pair }
+}
+
 export function playQuestion(q: Question, voice: Voice) {
   if (q.mode === 'harm') playChord(q.midis, voice, q.kind === 'chord' ? 0.02 : 0, 1.8)
   else playSequence(q.midis, voice, 0.75, 1.1)
