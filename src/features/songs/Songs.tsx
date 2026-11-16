@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
-import { chordName, prepare, segment, type ChordLabel, type Detail, type Prepared } from '../../audio/chords'
-import { playChord } from '../../audio/synth'
+import type { AnalysisMessage, AnalysisRequest } from '../../audio/analysis.worker'
+import { chordName, segment, type ChordLabel, type Detail, type Prepared } from '../../audio/chords'
+import type { MelodyNote } from '../../audio/melody'
+import { playChord, playNote } from '../../audio/synth'
 import { ChordBox } from '../../components/ChordBox'
 import { Button, Chip, FieldLabel, PageHeader } from '../../components/ui'
 import { useT } from '../../i18n'
@@ -21,9 +23,9 @@ const MIN_SHARE = 0.03
 
 type State =
   | { phase: 'idle' }
-  | { phase: 'decoding' | 'analysing'; name: string }
+  | { phase: 'decoding' | 'chords' | 'melody'; name: string }
   | { phase: 'error'; message: string }
-  | { phase: 'done'; name: string; url: string; prepared: Prepared }
+  | { phase: 'done'; name: string; url: string; prepared: Prepared; melody: MelodyNote[] }
 
 async function decodeToMono(file: File): Promise<Float32Array> {
   // decodeAudioData resamples to the context's rate, so an offline context
@@ -36,6 +38,29 @@ async function decodeToMono(file: File): Promise<Float32Array> {
     for (let i = 0; i < mono.length; i++) mono[i] += data[i] / audio.numberOfChannels
   }
   return mono
+}
+
+/** Runs the analysis off the main thread, reporting which stage it is in. */
+function analyse(
+  samples: Float32Array,
+  onStage: (stage: 'chords' | 'melody') => void,
+): Promise<{ prepared: Prepared; melody: MelodyNote[] }> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('../../audio/analysis.worker.ts', import.meta.url), { type: 'module' })
+    const finish = (run: () => void) => {
+      worker.terminate()
+      run()
+    }
+    worker.onmessage = ({ data }: MessageEvent<AnalysisMessage>) => {
+      if (data.type === 'progress') onStage(data.stage)
+      else if (data.type === 'done') finish(() => resolve({ prepared: data.prepared, melody: data.melody }))
+      else finish(() => reject(new Error('analysis failed')))
+    }
+    worker.onerror = () => finish(() => reject(new Error('analysis failed')))
+    const request: AnalysisRequest = { samples, sampleRate: ANALYSIS_RATE }
+    // Transfer, not copy: the samples are several megabytes and not needed here again.
+    worker.postMessage(request, [samples.buffer])
+  })
 }
 
 const clock = (seconds: number) =>
@@ -60,11 +85,8 @@ export function Songs() {
     setState({ phase: 'decoding', name: file.name })
     try {
       const mono = await decodeToMono(file)
-      setState({ phase: 'analysing', name: file.name })
-      // Let the "analysing" message paint before the main thread gets busy.
-      await new Promise((resolve) => setTimeout(resolve, 30))
-      const prepared = prepare(mono, ANALYSIS_RATE)
-      setState({ phase: 'done', name: file.name, url: URL.createObjectURL(file), prepared })
+      const result = await analyse(mono, (stage) => setState({ phase: stage, name: file.name }))
+      setState({ phase: 'done', name: file.name, url: URL.createObjectURL(file), ...result })
     } catch {
       setState({ phase: 'error', message: t('songs.error') })
     }
@@ -76,7 +98,7 @@ export function Songs() {
     void load(e.dataTransfer.files[0])
   }
 
-  const busy = state.phase === 'decoding' || state.phase === 'analysing'
+  const busy = state.phase === 'decoding' || state.phase === 'chords' || state.phase === 'melody'
 
   return (
     <div>
@@ -99,6 +121,7 @@ export function Songs() {
           name={state.name}
           url={state.url}
           prepared={state.prepared}
+          melody={state.melody}
           onAnother={() => inputRef.current?.click()}
         />
       ) : (
@@ -116,7 +139,7 @@ export function Songs() {
           {busy ? (
             <p className="text-lg" role="status">
               <span className="mr-2 inline-block animate-pulse">🎧</span>
-              {t(state.phase === 'decoding' ? 'songs.decoding' : 'songs.analysing')}
+              {t(state.phase === 'decoding' ? 'songs.decoding' : state.phase === 'chords' ? 'songs.analysing' : 'songs.melodyStage')}
               <span className="mt-1 block text-sm text-mute">{state.name}</span>
             </p>
           ) : (
@@ -145,14 +168,21 @@ interface ResultProps {
   name: string
   url: string
   prepared: Prepared
+  melody: MelodyNote[]
   onAnother: () => void
 }
 
-function Result({ name, url, prepared, onAnother }: ResultProps) {
+function Result({ name, url, prepared, melody, onAnother }: ResultProps) {
   const t = useT()
   const audioRef = useRef<HTMLAudioElement>(null)
   const [time, setTime] = useState(0)
   const [detail, setDetail] = useState<Detail>('simple')
+  const [showMelody, setShowMelody] = useState(true)
+  const [hearMelody, setHearMelody] = useState(false)
+  const hearRef = useRef(false)
+  useEffect(() => {
+    hearRef.current = hearMelody
+  }, [hearMelody])
 
   const { key, tuningCents, duration } = prepared
   // The heavy work is done once; re-cutting at another level of detail is instant.
@@ -165,14 +195,25 @@ function Result({ name, url, prepared, onAnother }: ResultProps) {
   // every frame keeps the playhead and the current chord in step.
   useEffect(() => {
     let raf = 0
+    let last = 0
     const tick = () => {
       raf = requestAnimationFrame(tick)
-      const now = audioRef.current?.currentTime ?? 0
+      const audio = audioRef.current
+      const now = audio?.currentTime ?? 0
+      // Play each detected note as the song reaches it, so the guess can be
+      // judged by ear against the real thing. Skipped across seeks.
+      if (hearRef.current && audio && !audio.paused && now > last && now - last < 0.3) {
+        for (const note of melody) {
+          if (note.start > now) break
+          if (note.start > last) playNote(note.midi, 'piano', 0, Math.min(1.5, note.end - note.start))
+        }
+      }
+      last = now
       setTime((prev) => (Math.abs(prev - now) > 0.02 ? now : prev))
     }
     tick()
     return () => cancelAnimationFrame(raf)
-  }, [])
+  }, [melody])
 
   const index = Math.max(
     0,
@@ -180,6 +221,20 @@ function Result({ name, url, prepared, onAnother }: ResultProps) {
   )
   const current = segments[index]
   const next = segments.slice(index + 1).find((s) => s.chord)
+
+  // The melody lane is scaled to the notes this song actually uses.
+  const range = useMemo(() => {
+    if (!melody.length) return null
+    let low = Infinity
+    let high = -Infinity
+    for (const note of melody) {
+      low = Math.min(low, note.midi)
+      high = Math.max(high, note.midi)
+    }
+    return { low: low - 1, high: high + 1 }
+  }, [melody])
+  const noteName = (midi: number) => `${names[midi % 12]}${Math.floor(midi / 12) - 1}`
+  const singing = melody.find((note) => time >= note.start && time < note.end)
 
   const used = useMemo(() => {
     const totals = new Map<string, { chord: ChordLabel; seconds: number }>()
@@ -247,6 +302,9 @@ function Result({ name, url, prepared, onAnother }: ResultProps) {
           <div className="font-display text-6xl font-semibold text-accent" aria-live="off">
             {current?.chord ? label(current.chord) : <span className="text-3xl text-mute">{t('songs.noChord')}</span>}
           </div>
+          {showMelody && range && (
+            <div className="mt-1 min-h-5 text-sm text-mute">{singing ? `♪ ${noteName(singing.midi)}` : ''}</div>
+          )}
         </div>
         <div className="rounded-xl border border-line bg-surface p-5">
           <FieldLabel>{t('songs.next')}</FieldLabel>
@@ -258,7 +316,18 @@ function Result({ name, url, prepared, onAnother }: ResultProps) {
       <div className="mt-5">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <div className="text-xs font-bold tracking-widest text-mute uppercase">{t('songs.timeline')}</div>
-          <div className="flex gap-1.5">
+          <div className="flex flex-wrap gap-1.5">
+            {range && (
+              <>
+                <Chip active={showMelody} onClick={() => setShowMelody((v) => !v)}>
+                  ♪ {t('songs.melody')}
+                </Chip>
+                <Chip active={hearMelody} onClick={() => setHearMelody((v) => !v)} title={t('songs.melodyHearHint')}>
+                  🔊 {t('songs.melodyHear')}
+                </Chip>
+                <span className="mx-1 w-px self-stretch bg-line" />
+              </>
+            )}
             <Chip active={detail === 'simple'} onClick={() => setDetail('simple')} title={t('songs.simpleHint')}>
               {t('songs.simple')}
             </Chip>
@@ -273,11 +342,12 @@ function Result({ name, url, prepared, onAnother }: ResultProps) {
             const rowEnd = rowStart + ROW_SECONDS
             const inRow = time >= rowStart && time < rowEnd
             return (
-              <div key={row} className="flex items-center gap-2">
-                <span className={`w-9 shrink-0 text-right text-xs tabular-nums ${inRow ? 'font-bold text-accent' : 'text-mute'}`}>
+              <div key={row} className="flex items-start gap-2">
+                <span className={`w-9 shrink-0 pt-2.5 text-right text-xs tabular-nums ${inRow ? 'font-bold text-accent' : 'text-mute'}`}>
                   {clock(rowStart)}
                 </span>
-                <div className="relative h-9 flex-1">
+                <div className="min-w-0 flex-1">
+                <div className="relative h-9">
                   {segments.map((s, i) => {
                     // A chord that crosses the end of a row is drawn in both rows.
                     const from = Math.max(s.start, rowStart)
@@ -291,7 +361,7 @@ function Result({ name, url, prepared, onAnother }: ResultProps) {
                         onClick={() => seek(from)}
                         title={`${clock(s.start)} · ${label(s.chord)}`}
                         className={`absolute inset-y-0 overflow-hidden rounded-md border px-1.5 text-left text-sm font-bold whitespace-nowrap transition ${
-                          i === index
+                          i === index && inRow
                             ? 'border-accent bg-accent text-ink'
                             : s.chord
                               ? 'border-line bg-raised hover:border-mute'
@@ -313,10 +383,38 @@ function Result({ name, url, prepared, onAnother }: ResultProps) {
                     />
                   )}
                 </div>
+                {showMelody && range && (
+                  <div className="relative mt-0.5 mb-1 h-10 rounded-sm bg-ink/60">
+                    {melody.map((note, i) => {
+                      if (note.end <= rowStart || note.start >= rowEnd) return null
+                      const from = Math.max(note.start, rowStart)
+                      const to = Math.min(note.end, rowEnd)
+                      const height = (note.midi - range.low) / (range.high - range.low)
+                      return (
+                        <span
+                          key={i}
+                          title={`${clock(note.start)} · ${noteName(note.midi)}`}
+                          className={`absolute h-1 rounded-full ${note === singing ? 'bg-root' : 'bg-accent/80'}`}
+                          style={{
+                            left: `${((from - rowStart) / ROW_SECONDS) * 100}%`,
+                            width: `max(3px, ${((to - from) / ROW_SECONDS) * 100}%)`,
+                            bottom: `calc(${height * 100}% - 2px)`,
+                          }}
+                        />
+                      )
+                    })}
+                  </div>
+                )}
+                </div>
               </div>
             )
           })}
         </div>
+        {showMelody && range && (
+          <p className="mt-2 max-w-2xl text-xs text-mute">
+            {t('songs.melodyLegend', { low: noteName(range.low + 1), high: noteName(range.high - 1) })}
+          </p>
+        )}
       </div>
 
       <div className="mt-5">

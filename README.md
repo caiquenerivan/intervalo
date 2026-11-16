@@ -17,7 +17,7 @@ No account, no backend: everything runs on the device, including the microphone 
 2. **Ear training** — each level starts with a short lesson: what every interval or chord feels like, a familiar tune to hang it on, and side-by-side examples from the same starting note. Then the app plays one and you name it. Four levels each, scheduled with spaced repetition so what you miss comes back sooner; after a mistake you can hear your answer against the right one.
 3. **Tuner** — tunes a guitar from the microphone, detecting pitch with the YIN algorithm.
 4. **Lessons** — eight short lessons (notes → intervals → chords → scales) with quizzes, "find this note" exercises and listening rounds. Progress, XP, a daily streak and achievements are saved locally.
-5. **Songs** — drop in an MP3 (or WAV, M4A, OGG) and get its chords laid out like a chord sheet that follows the playback, plus the likely key, how far the recording is from standard tuning and a guitar diagram for each chord. Major and minor chords only.
+5. **Songs** — drop in an MP3 (or WAV, M4A, OGG) and get its chords laid out like a chord sheet that follows the playback, plus the likely key, how far the recording is from standard tuning and a guitar diagram for each chord (major and minor chords only). Under the chords it draws a sketch of the melody as a piano roll, which can be played back on top of the song to check it by ear.
 
 The interface is in English and Portuguese.
 
@@ -41,14 +41,14 @@ React 19 · TypeScript · Vite · Tailwind CSS 4 · Zustand (persisted to `local
 ```
 src/
   theory/      notes, intervals, chord/scale formulas, instrument maps — pure functions
-  audio/       pitch.ts (YIN), chords.ts (chord recognition), synth.ts (Karplus–Strong guitar, additive piano)
+  audio/       pitch.ts (YIN), chords.ts (chord recognition), melody.ts (melody sketch), analysis.worker.ts, synth.ts (Karplus–Strong guitar, additive piano)
   store/       progress store, spaced repetition, streak, achievements
   components/  Fretboard and Keyboard (SVG), shared UI
   features/    explorer · ear · tuner · lessons · songs · home
   i18n/        en.ts, pt.ts
 ```
 
-Everything that is logic rather than pixels (`theory/`, `audio/pitch.ts`, `audio/chords.ts`, `store/srs.ts`, `store/streak.ts`) is pure and unit-tested.
+Everything that is logic rather than pixels (`theory/`, `audio/pitch.ts`, `audio/chords.ts`, `audio/melody.ts`, `store/srs.ts`, `store/streak.ts`) is pure and unit-tested.
 
 ## Technical decisions
 
@@ -100,7 +100,20 @@ The key comes from correlating the song's total chroma with the Krumhansl–Kess
 
 **Limits, stated plainly:** it only knows major and minor triads (G7 shows as G), it has no notion of bars or beats, and the automated tests use synthesised progressions (with a louder melody and drums on top, a detuned one), and beyond that it has been checked by ear on a single real recording, not measured against annotated data. Expect it to do well on clear guitar or piano and to struggle with heavy distortion.
 
-The analysis runs on the main thread after decoding: about a second for a short clip, but 7–8 s for a four-minute song, during which the page is frozen. Moving it to a Web Worker is the obvious next step.
+The analysis runs in a Web Worker, so the page stays responsive. A four-minute song takes about 8 s in the browser (roughly 1 s for the chords, the rest for the melody). Most of that was won by caching the FFT's sine/cosine tables instead of computing them inside the butterflies, which cut the total by a factor of four.
+
+### A melody sketch from the same recording
+
+[`melody.ts`](src/audio/melody.ts) answers a different question from the tuner and from the chords: of everything sounding, which single line would a listener sing back? It is a small version of the salience method (Salamon & Gómez's *Melodia* is the reference):
+
+1. **Salience.** In 23 ms steps, every spectral peak votes for the pitches it could be an overtone of (f, f/2, f/3 … f/8), on a grid of 20 cents from G2 to G5. A voice has many strong overtones, so its pitch collects many votes; a plucked string collects fewer.
+2. **Octave check.** A loud note's second overtone can outweigh its fundamental. What tells the two apart is the odd overtones of the lower pitch, which exist only if the lower note is really there; when they are present, the upper candidate is turned down.
+3. **Tracking.** Viterbi picks one pitch or "nobody singing" per frame, paying for leaps and for starting and stopping, so the line moves the way a voice does instead of hopping between instruments.
+4. **Notes.** A short median removes vibrato, the track is rounded to semitones, and runs shorter than 0.12 s are dropped.
+
+It is drawn as a piano roll under the chords rather than as staff notation on purpose. Writing rhythm (quarter notes, eighths) needs the tempo and a decision about where each note sits on the beat, and singers push and pull the beat deliberately; guessing that badly would make the result look more exact than it is.
+
+**How far to trust it:** the tests cover synthesised voices, alone and over a strummed accompaniment. On the one real recording tried, nearly all detected notes fell inside the song's key, which is a necessary sign, not a proof — nobody has compared it note by note with the real tune. It follows a guitar fill when nobody is singing, and octave errors remain in loud passages. The "Play it along" switch exists so the listener can judge.
 
 ### Sound without samples
 
@@ -124,5 +137,6 @@ Chords and scales are spelled with sharps or flats according to the key signatur
 
 - Recognising chords played live on the microphone, and following along with songs.
 - Seventh and extended chords, beat/bar detection and lyrics in the song analysis.
+- Staff notation for the melody (it needs tempo and beat tracking first).
 - Alternate tunings and a chromatic tuner mode.
 - Accounts and cross-device sync.

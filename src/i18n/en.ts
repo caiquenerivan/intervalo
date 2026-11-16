@@ -163,6 +163,12 @@ export const en = {
   'songs.detailed': 'Detailed',
   'songs.simpleHint': 'Main chords only: short passing chords are left out',
   'songs.detailedHint': 'Every change it hears, including quick passing chords and bass runs',
+  'songs.melodyStage': 'Following the melody…',
+  'songs.melody': 'Melody',
+  'songs.melodyHear': 'Play it along',
+  'songs.melodyHearHint': 'Plays each detected note on a piano while the song plays, so you can hear where it is right',
+  'songs.melodyLegend':
+    'Melody line, from {low} (bottom) to {high} (top): the single line that stands out most at each moment. It is a rough sketch — it follows a guitar fill when nobody is singing, and can land an octave off. Turn on “Play it along” to check it by ear.',
   'songs.another': 'Choose another file',
   'songs.limits':
     'This is an estimate, not a transcription. It hears only major and minor chords, so a G7 shows as G and a Cmaj7 as C or Em. It works best on recordings where guitar or piano is clear, and worse with heavy distortion or loud drums.',

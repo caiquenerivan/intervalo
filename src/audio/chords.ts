@@ -98,9 +98,26 @@ const FILL_MAX_FIT = 0.7
 const KEY_BONUS = 0.1
 /** Score given to "no chord"; a real chord has to beat it. */
 const NO_CHORD_SCORE = 0.55
+/** cos/sin tables per FFT size: computing them inside the butterflies is most of the cost. */
+const twiddles = new Map<number, { cos: Float32Array; sin: Float32Array }>()
+
+function twiddleTable(n: number) {
+  let table = twiddles.get(n)
+  if (!table) {
+    table = { cos: new Float32Array(n / 2), sin: new Float32Array(n / 2) }
+    for (let k = 0; k < n / 2; k++) {
+      table.cos[k] = Math.cos((-2 * Math.PI * k) / n)
+      table.sin[k] = Math.sin((-2 * Math.PI * k) / n)
+    }
+    twiddles.set(n, table)
+  }
+  return table
+}
+
 /** In-place radix-2 FFT. `re`/`im` must have a power-of-two length. */
 export function fft(re: Float32Array, im: Float32Array): void {
   const n = re.length
+  const { cos, sin } = twiddleTable(n)
   for (let i = 1, j = 0; i < n; i++) {
     let bit = n >> 1
     for (; j & bit; bit >>= 1) j ^= bit
@@ -116,15 +133,15 @@ export function fft(re: Float32Array, im: Float32Array): void {
   }
   for (let size = 2; size <= n; size <<= 1) {
     const half = size >> 1
-    const step = (-2 * Math.PI) / size
+    const stride = n / size
     for (let start = 0; start < n; start += size) {
       for (let k = 0; k < half; k++) {
-        const cos = Math.cos(step * k)
-        const sin = Math.sin(step * k)
+        const c = cos[k * stride]
+        const s = sin[k * stride]
         const a = start + k
         const b = a + half
-        const tr = re[b] * cos - im[b] * sin
-        const ti = re[b] * sin + im[b] * cos
+        const tr = re[b] * c - im[b] * s
+        const ti = re[b] * s + im[b] * c
         re[b] = re[a] - tr
         im[b] = im[a] - ti
         re[a] += tr
@@ -165,7 +182,7 @@ function findPeaks(samples: Float32Array, sampleRate: number): Peaks {
     fft(re, im)
     let max = 0
     for (let k = kMin - 1; k <= kMax + 1; k++) {
-      mags[k] = Math.hypot(re[k], im[k])
+      mags[k] = Math.sqrt(re[k] * re[k] + im[k] * im[k])
       if (mags[k] > max) max = mags[k]
     }
     const floor = max * 0.05

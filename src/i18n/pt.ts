@@ -166,6 +166,12 @@ export const pt: Record<Key, string> = {
   'songs.detailed': 'Detalhada',
   'songs.simpleHint': 'Só os acordes principais: os de passagem ficam de fora',
   'songs.detailedHint': 'Toda mudança que o app ouve, incluindo acordes de passagem e baixos caminhando',
+  'songs.melodyStage': 'Seguindo a melodia…',
+  'songs.melody': 'Melodia',
+  'songs.melodyHear': 'Tocar junto',
+  'songs.melodyHearHint': 'Toca cada nota detectada num piano enquanto a música toca, para você ouvir onde acertou',
+  'songs.melodyLegend':
+    'Linha da melodia, de {low} (embaixo) a {high} (em cima): a linha que mais se destaca a cada momento. É um rascunho — ela segue uma frase do violão quando ninguém canta, e pode cair uma oitava fora. Ligue “Tocar junto” para conferir de ouvido.',
   'songs.another': 'Escolher outro arquivo',
   'songs.limits':
     'Isto é uma estimativa, não uma transcrição. O app só ouve acordes maiores e menores, então um G7 aparece como G e um Cmaj7 como C ou Em. Funciona melhor em gravações com violão ou piano claros, e pior com muita distorção ou bateria alta.',
