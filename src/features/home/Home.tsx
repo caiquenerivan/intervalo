@@ -13,6 +13,7 @@ const FEATURES: { to: string; icon: string; title: Key; desc: Key }[] = [
   { to: '/explore', icon: '🎹', title: 'nav.explore', desc: 'home.explore.desc' },
   { to: '/ear', icon: '👂', title: 'nav.ear', desc: 'home.ear.desc' },
   { to: '/tuner', icon: '🎸', title: 'nav.tuner', desc: 'home.tuner.desc' },
+  { to: '/songs', icon: '🎧', title: 'nav.songs', desc: 'home.songs.desc' },
 ]
 
 export function Home() {

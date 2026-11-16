@@ -9,6 +9,7 @@ No account, no backend: everything runs on the device, including the microphone 
 |---|---|
 | ![Home](docs/home.jpg) | ![Chord and scale explorer](docs/explore.jpg) |
 | ![Ear training](docs/ear-training.jpg) | ![Tuner](docs/tuner.jpg) |
+| ![Chords from a song](docs/songs.jpg) | ![Notes of a song](docs/notes.jpg) |
 
 ## What it does
 
@@ -16,6 +17,7 @@ No account, no backend: everything runs on the device, including the microphone 
 2. **Ear training** — each level starts with a short lesson: what every interval or chord feels like, a familiar tune to hang it on, and side-by-side examples from the same starting note. Then the app plays one and you name it. Four levels each, scheduled with spaced repetition so what you miss comes back sooner; after a mistake you can hear your answer against the right one.
 3. **Tuner** — tunes a guitar from the microphone, detecting pitch with the YIN algorithm.
 4. **Lessons** — eight short lessons (notes → intervals → chords → scales) with quizzes, "find this note" exercises and listening rounds. Progress, XP, a daily streak and achievements are saved locally.
+5. **Songs** — drop in an MP3 (or WAV, M4A, OGG) and get its chords laid out like a chord sheet that follows the playback, plus the likely key, how far the recording is from standard tuning and a guitar diagram for each chord (major and minor chords only). Below the chords, a note panel shows every note it hears in the stretch being played — voice and instruments together — on a sideways piano: one named row per key, with sharps and flats in their own colour and each note carrying its name. The notes can be played back on top of the song to check them by ear.
 
 The interface is in English and Portuguese.
 
@@ -34,19 +36,19 @@ The tuner needs `localhost` or HTTPS — browsers only open the microphone in a 
 
 ## Stack
 
-React 19 · TypeScript · Vite · Tailwind CSS 4 · Zustand (persisted to `localStorage`) · React Router · Vitest. Audio is the plain Web Audio API, with no audio library.
+React 19 · TypeScript · Vite · Tailwind CSS 4 · Zustand (persisted to `localStorage`) · React Router · Vitest. Audio is the plain Web Audio API, with no audio library. The one exception is the note transcription on the Songs page, which uses [Basic Pitch](https://github.com/spotify/basic-pitch-ts) on TensorFlow.js, loaded only when a song is analysed.
 
 ```
 src/
   theory/      notes, intervals, chord/scale formulas, instrument maps — pure functions
-  audio/       pitch.ts (YIN), synth.ts (Karplus–Strong guitar, additive piano)
+  audio/       pitch.ts (YIN), chords.ts (chord recognition), transcribe.ts (note transcription, Basic Pitch), two workers, synth.ts (Karplus–Strong guitar, additive piano)
   store/       progress store, spaced repetition, streak, achievements
   components/  Fretboard and Keyboard (SVG), shared UI
-  features/    explorer · ear · tuner · lessons · home
+  features/    explorer · ear · tuner · lessons · songs · home
   i18n/        en.ts, pt.ts
 ```
 
-Everything that is logic rather than pixels (`theory/`, `audio/pitch.ts`, `store/srs.ts`, `store/streak.ts`) is pure and unit-tested.
+Everything that is logic rather than pixels (`theory/`, `audio/pitch.ts`, `audio/chords.ts`, `store/srs.ts`, `store/streak.ts`) is pure and unit-tested.
 
 ## Technical decisions
 
@@ -78,6 +80,48 @@ The window is 4096 samples (≈85 ms, about 7 periods of low E). The inner loop 
 
 Tests feed the detector pure tones, a tone whose 2nd harmonic is louder than the fundamental, noisy signals and synthesised plucked strings for all six open strings.
 
+### Chords from a recording
+
+Finding one pitch (the tuner) and finding a chord in a full mix are different problems: YIN assumes a single periodic source, and a song is many at once. [`chords.ts`](src/audio/chords.ts) uses the classic chroma approach instead:
+
+1. **Decode at 11 kHz.** Chords live below ~2 kHz. `decodeAudioData` on an `OfflineAudioContext` created at 11 025 Hz resamples for free, so there is a quarter of the data and each 4096-sample FFT window spans 0.37 s — bins 2.7 Hz apart, enough to separate semitones down to C2.
+2. **Spectral peaks.** Each frame keeps only its local maxima between 65 Hz and 1.4 kHz, with parabolic interpolation for the exact frequency. This drops the noise floor and most of the drums.
+3. **Tuning correction.** Recordings are often not at A = 440. The deviation of every peak from its nearest semitone is averaged as a circular mean (it is an angle: +50 and −50 cents are the same place) and removed before rounding to notes.
+4. **Chroma, weighted toward the harmony.** Peaks are folded into 12 pitch classes, ignoring the octave. Peaks above ~330 Hz fade progressively and magnitudes are square-rooted, so a loud voice or lead guitar cannot outvote the band. Notes below 180 Hz are also kept apart as a bass chroma.
+5. **Median filter over time.** Each pitch class is replaced by its median over about ±1 s. A chord tone is present for the whole chord; a melody note lasts a fraction of a second, so the median never sees it. This was the fix for the first version, which followed the tune instead of the chords.
+6. **Template matching.** Each frame is compared (cosine similarity) with the root–third–fifth pattern of the 24 major and minor triads, plus a "no chord" state. The bass chroma adds a vote for the root, since the bass line nearly always plays it, and chords that belong to the estimated key get a small bonus: a song mostly uses the chords of its key, so the others need clearer evidence.
+7. **Viterbi smoothing.** Picking the best chord per frame flickers on every passing note. Viterbi finds the sequence with the best total score while charging a fixed cost per chord change, which is what makes the output read like a chord chart.
+
+There are two levels of detail, **Simple** and **Detailed**, which differ in the median window, the change cost and the shortest chord allowed. Without beat tracking there is no single right answer — a bass run between two chords is a chord at one setting and a passing note at the other — so the choice is left to the person. The spectral work is done once (`prepare`), and re-cutting at the other level (`segment`) is instant.
+
+Simple also drops **fills**: a short chord sandwiched between two stretches of the same chord (E – C♯m – E) whose notes fit the chord poorly. On the recording used for tuning this, those were a guitar walk-down in the bass (E–D♯–C♯ with no G♯), not a C♯m. A short chord that is complete — all three notes, little else — is kept.
+
+The key comes from correlating the song's total chroma with the Krumhansl–Kessler key profiles.
+
+**Limits, stated plainly:** it only knows major and minor triads (G7 shows as G), it has no notion of bars or beats, and the automated tests use synthesised progressions (with a louder melody and drums on top, a detuned one), and beyond that it has been checked by ear on a single real recording, not measured against annotated data. Expect it to do well on clear guitar or piano and to struggle with heavy distortion.
+
+Both analyses run in Web Workers, so the page stays responsive. On a laptop with integrated graphics, a four-minute song takes about 3 s for the chords and about 30 s more for the notes. Caching the FFT's sine/cosine tables instead of computing them inside the butterflies cut the chord analysis to a quarter of its first version.
+
+### Notes from the same recording: where hand-written DSP ran out
+
+The first attempt at showing the tune was a hand-written predominant-melody tracker (harmonic-sum salience plus Viterbi, in the spirit of *Melodia*). It passed its synthetic tests and failed on a real song, for a reason no parameter could fix: it reports **one** pitch per instant. With a voice over fingerpicked guitar it hopped between the two, and it could never follow the fingerpicking, where several strings ring at once. That code was removed.
+
+What the task needs is polyphonic transcription, and that is done today with trained models. [`transcribe.ts`](src/audio/transcribe.ts) uses **Basic Pitch** (Bittner et al., Spotify, 2022; Apache-2.0), a small model (under 1 MB) that runs in the browser on TensorFlow.js and outputs every note sounding at once.
+
+Things that had to be solved around it:
+
+- **Worker.** On the main thread the model froze the tab for 11 s on a 16 s clip. In a worker it uses the GPU through an `OffscreenCanvas` and the page never stalls. The library reads `window` in one place, so the worker aliases it to `self`.
+- **Post-processing in chunks.** Turning the model's output into notes took 40 s on a full song, longer than the model itself, because its cost grows faster than the input. Doing it 20 s at a time and shifting the frame numbers back brought it to 5 s. Chunks are a multiple of the model's 172-frame window so the frame-to-time correction stays exact.
+- **Ghost notes.** The model sometimes reports a note's overtones as extra notes. `removeGhosts` drops a weaker note that starts together with another one an octave, an octave and a fifth, or two octaves below it.
+- **One decode.** The file is decoded once at the 22 kHz the model needs and halved (with a small low-pass) for the chord analysis.
+- **Lazy loading.** TensorFlow.js is a 1 MB chunk (257 kB gzipped) that is only fetched when someone analyses a song. If it fails to load or run, the chords are still shown.
+
+**What it does not do:** tell the voice from the guitar. Everything lands in one piano roll. Separating sources needs much larger models (Demucs and the like), too heavy for a static site.
+
+**How far to trust it:** on a synthesised clip of fingerpicking plus a sung line, all 78 real notes were found and 2 of the 135 reported notes were wrong. Real recordings are harder and have not been measured; the "Play them along" switch exists so the listener can judge. **Reading it without knowing music.** A bare piano roll assumes you can tell a pitch from its height, which a beginner cannot. So the panel pages through the song 10 seconds at a time (wide enough that even a short note has room for its name), labels every row with its key, shades the black-key rows, colours sharps and flats differently from natural notes, and spells them the way the song's key does (F♯ in E major, G♭ in D♭ major). Tapping a note or a key plays it.
+
+It is drawn as a piano roll rather than staff notation on purpose: writing rhythm needs the tempo and a decision about where each note sits on the beat, and guessing that badly would make the result look more exact than it is.
+
 ### Sound without samples
 
 No audio files are shipped. Guitar notes use **Karplus–Strong** synthesis: a burst of noise loops through a delay line one period long and is low-pass filtered on every pass — which is roughly what a plucked string does. A fractional delay keeps high notes in tune. Piano notes are five decaying sine partials with slight inharmonic stretch. See [`synth.ts`](src/audio/synth.ts).
@@ -98,6 +142,8 @@ Chords and scales are spelled with sharps or flats according to the key signatur
 
 ## Not in this version
 
-- Recognising chords played live, and following along with songs. Polyphonic detection is a different problem from finding one pitch (YIN assumes a single periodic source).
+- Recognising chords played live on the microphone, and following along with songs.
+- Seventh and extended chords, beat/bar detection and lyrics in the song analysis.
+- Separating voice from instruments, and staff notation (which needs tempo and beat tracking first).
 - Alternate tunings and a chromatic tuner mode.
 - Accounts and cross-device sync.
